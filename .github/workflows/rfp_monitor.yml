@@ -1,0 +1,83 @@
+name: CxA RFP Monitor
+
+on:
+  schedule:
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Keyword mode (broad or medium)"
+        required: false
+        default: "broad"
+        type: choice
+        options:
+          - broad
+          - medium
+      dry_run:
+        description: "Dry run -- log only, no email, no state update"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      sources:
+        description: "Sources to run (sam, utilities, states_direct, google_cse, all)"
+        required: false
+        default: "all"
+      force_all:
+        description: "Ignore seen-set and report all passing opportunities"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  monitor:
+    name: RFP Monitor Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run RFP Monitor
+        env:
+          SAM_API_KEY:      ${{ secrets.SAM_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          GOOGLE_CSE_KEY:   ${{ secrets.GOOGLE_CSE_KEY }}
+          GOOGLE_CSE_ID:    ${{ secrets.GOOGLE_CSE_ID }}
+          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+        run: |
+          mkdir -p scrapers
+          touch scrapers/__init__.py
+
+          CMD="python main.py"
+          CMD="$CMD --mode ${{ github.event.inputs.mode || 'broad' }}"
+          CMD="$CMD --sources ${{ github.event.inputs.sources || 'all' }}"
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            CMD="$CMD --dry-run"
+          fi
+
+          if [ "${{ github.event.inputs.force_all }}" = "true" ]; then
+            CMD="$CMD --force-all"
+          fi
+
+          echo "Executing: $CMD"
+          $CMD
