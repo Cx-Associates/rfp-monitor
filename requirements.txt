@@ -1,0 +1,21 @@
+# requirements.txt -- CxA RFP Monitor
+#
+# Install: pip install -r requirements.txt
+#
+# Minimum version pins (>= ) allow security patches while keeping installs stable.
+# Pin to == if you need strict reproducibility across environments.
+
+requests>=2.31.0         # HTTP requests (scraping + API calls)
+beautifulsoup4>=4.12.0   # HTML parsing for web scraping
+lxml>=4.9.0              # Faster HTML parser backend for BeautifulSoup
+sendgrid>=6.11.0         # SendGrid email delivery (free tier: 100/day)
+supabase>=2.0.0          # Supabase client for state persistence (dedup table)
+urllib3>=2.0.0           # HTTP connection pooling (used by requests internally)
+
+# OPTIONAL (Phase 2 -- not needed for current build):
+# playwright>=1.40.0     # For JavaScript-rendered portals (National Grid, Avangrid)
+#                          Install: pip install playwright && playwright install chromium
+
+# Standard library modules used (no install needed):
+#   json, os, sys, re, hashlib, datetime, logging, argparse
+#   dataclasses, typing, urllib.parse, time
