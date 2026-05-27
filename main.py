@@ -154,8 +154,14 @@ def run_scrapers(source_str: str) -> List:
     run_source("Priority State Portals (direct)", "states_direct", fetch_direct_scrape_states)
 
     # Google CSE (broad US state portal coverage via search API)
-    from scrapers.google_cse import fetch_google_cse_results
-    run_source("Google CSE (State Portals)", "google_cse", fetch_google_cse_results)
+    # NOTE: Disabled until Google Cloud billing account is configured.
+    # The 403 errors indicate the API key is not authorized for use without
+    # a billing account attached to the Google Cloud project.
+    # To re-enable: set up billing at console.cloud.google.com and change
+    # the condition below back to: "google_cse" in source_list
+    if False:  # Disabled -- remove this line and uncomment below to re-enable
+        from scrapers.google_cse import fetch_google_cse_results
+        run_source("Google CSE (State Portals)", "google_cse", fetch_google_cse_results)
 
     logger.info(f"{'='*55}")
     logger.info(f"All scrapers complete. Total raw: {len(raw_opps)}")
