@@ -377,7 +377,7 @@ STATE_EXPIRY_DAYS  = 180
 # ---------------------------------------------------------------------------
 
 SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
-EMAIL_FROM           = "rfp-monitor@cx-associates.com"
+EMAIL_FROM           = "eric@cx-assoc.com"
 EMAIL_TO = [
     "eric@cx-assoc.com",
 ]
