@@ -191,30 +191,25 @@ SAM_SEARCH_QUERIES = [
 
 UTILITY_SOURCES = [
     # --- National / multi-state quasi-publics ---
-    {
-        "name": "NASEO RFP Board",
-        "url": "https://www.naseo.org/rfps",
-        "js_render": False,
-        "active": True,
-        "notes": "National Association of State Energy Officials. Broad coverage.",
-    },
+    # NOTE: NASEO is handled by its own dedicated scraper (fetch_naseo) and is
+    # intentionally NOT listed here to avoid scraping it twice.
     {
         "name": "NEEP (Northeast Energy Efficiency Partnerships)",
-        "url": "https://neep.org/about-neep/work-neep",
+        "url": "https://neep.org/our-work/rfps",          # Updated URL
         "js_render": False,
         "active": True,
         "notes": "Regional evaluation coordination. Issues EM&V RFPs directly.",
     },
     {
         "name": "ACEEE",
-        "url": "https://www.aceee.org/about/work-aceee",
+        "url": "https://www.aceee.org/contract-opportunities",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "American Council for an Energy-Efficient Economy. National scope.",
     },
     {
         "name": "E4TheFuture",
-        "url": "https://e4thefuture.org/",
+        "url": "https://e4thefuture.org/resources/rfps/",
         "js_render": False,
         "active": True,
         "notes": "Northeast nonprofit. Aggregates and issues NE energy efficiency RFPs.",
@@ -229,7 +224,7 @@ UTILITY_SOURCES = [
     },
     {
         "name": "ISO-NE Solicitations",
-        "url": "https://www.iso-ne.com/participate/solicitations-rfps/",
+        "url": "https://www.iso-ne.com/participate/solicitations-rfps",  # Removed trailing slash
         "js_render": False,
         "active": True,
         "notes": "Regional ISO. Load research, market studies.",
@@ -243,7 +238,7 @@ UTILITY_SOURCES = [
     },
     {
         "name": "Green Mountain Power",
-        "url": "https://greenmountainpower.com/about/procurement/",
+        "url": "https://greenmountainpower.com/procurement/",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "Vermont primary utility. Most relevant for CxA geography.",
@@ -279,21 +274,21 @@ UTILITY_SOURCES = [
     },
     {
         "name": "Efficiency Vermont",
-        "url": "https://www.efficiencyvermont.com/about/partners-vendors/rfp",
+        "url": "https://www.efficiencyvermont.com/partners-vendors/rfp",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "Vermont's efficiency utility. Direct EM&V issuer.",
     },
     {
         "name": "Efficiency Maine",
-        "url": "https://www.efficiencymaine.com/about/requests-for-proposals/",
+        "url": "https://www.efficiencymaine.com/about/rfps/",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "Maine's efficiency program administrator.",
     },
     {
         "name": "Mass Save / EEAC",
-        "url": "https://www.masssave.com/saving/business-programs",
+        "url": "https://www.masssave.com/en/about/requests-for-proposals",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "MA energy efficiency program administrator coalition.",
@@ -308,7 +303,7 @@ UTILITY_SOURCES = [
     },
     {
         "name": "EPA ENERGY STAR Solicitations",
-        "url": "https://www.energystar.gov/about/EPA_RFPs",
+        "url": "https://www.energystar.gov/about/our_work/contracts_rfps",  # Updated URL
         "js_render": False,
         "active": True,
         "notes": "EPA program evaluation and market studies.",
