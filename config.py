@@ -122,4 +122,284 @@ KEYWORDS_TERTIARY = [
 SCORE_PRIMARY_MATCH   = 10   # Primary keyword found in title or description
 SCORE_SECONDARY_MATCH = 5    # Secondary keyword match
 SCORE_TERTIARY_MATCH  = 2    # Tertiary keyword match (broad mode only)
-SCORE_TITLE_BONUS
+SCORE_TITLE_BONUS     = 5    # Extra points when keyword appears in TITLE
+
+# Minimum score to include in output at all
+MIN_SCORE_INCLUDE_BROAD  = 2    # Very low bar in broad mode; scorer handles noise
+MIN_SCORE_INCLUDE_MEDIUM = 5    # Requires at least one secondary match or title hit
+
+# Score at or above this is labeled "High Relevance"
+MIN_SCORE_HIGH_CONFIDENCE = 15
+
+# ---------------------------------------------------------------------------
+# SAM.GOV API (Federal opportunities -- the cleanest, most reliable source)
+#
+# Free API key: https://sam.gov/profile/details
+# Rate limit: 10 req/day (public), 1,000 req/day (entity-registered)
+#
+# KNOWN FAILURE POINTS:
+#   - Title-only search (no full-text search of attachments) means some
+#     EM&V RFPs with generic titles slip through. NAICS code queries
+#     compensate for this.
+#   - Rate limit: do not run more than once per day on a public (10/day) key.
+#   - API schema changes without notice; field mapping is in sam_gov.py.
+# ---------------------------------------------------------------------------
+
+SAM_API_BASE_URL   = "https://api.sam.gov/prod/opportunities/v2/search"
+SAM_LOOKBACK_DAYS  = 9      # Days back to search each run (9 = weekly + 2-day buffer)
+SAM_MAX_RESULTS    = 100    # Results per query (API max 1000; keep lower)
+
+# NAICS codes most likely to yield EM&V / engineering evaluation consulting work
+# 541690 = Other Scientific and Technical Consulting
+# 541620 = Environmental Consulting
+# 541330 = Engineering Services
+# 541712 = R&D in the Physical, Engineering, and Life Sciences (covers energy research)
+SAM_NAICS_CODES = ["541690", "541620", "541330", "541712"]
+
+# SAM.gov keyword queries -- short phrases that work with title-only search.
+SAM_SEARCH_QUERIES = [
+    "evaluation measurement verification",
+    "M&V measurement verification",
+    "program evaluation energy",
+    "impact evaluation energy efficiency",
+    "IPMVP",
+    "baseline study energy",
+    "energy savings verification",
+    "DSM evaluation",
+    "demand side management evaluation",
+    "energy efficiency evaluation services",
+    "utility program evaluation",
+]
+
+# ---------------------------------------------------------------------------
+# UTILITY AND QUASI-PUBLIC SOURCES
+# ---------------------------------------------------------------------------
+
+UTILITY_SOURCES = [
+    # --- National / multi-state quasi-publics ---
+    # NOTE: NASEO is handled by its own dedicated scraper (fetch_naseo) and is
+    # intentionally NOT listed here to avoid scraping it twice.
+    {
+        "name": "NEEP (Northeast Energy Efficiency Partnerships)",
+        "url": "https://neep.org/about/requests-proposals",
+        "js_render": False,
+        "active": True,
+        "notes": "Confirmed URL. Lists RFPs NEEP has issued directly.",
+    },
+    {
+        "name": "ACEEE",
+        "url": "https://www.aceee.org/about/work-aceee",
+        "js_render": False,
+        "active": False,
+        "notes": "No confirmed RFP page. Disabled until a valid URL is found.",
+    },
+    {
+        "name": "E4TheFuture",
+        "url": "https://e4thefuture.org/resources/rfps/",
+        "js_render": False,
+        "active": False,
+        "notes": "Site appears JS-rendered. Disabled until Playwright upgrade.",
+    },
+    # --- New England utilities ---
+    {
+        "name": "NYSERDA",
+        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Requests-for-Proposals",
+        "js_render": False,
+        "active": True,
+        "notes": "Top EM&V issuer. Check weekly.",
+    },
+    {
+        "name": "ISO-NE Solicitations",
+        "url": "https://www.iso-ne.com/system-planning/transmission-planning/competitive-transmission",
+        "js_render": False,
+        "active": True,
+        "notes": "Confirmed URL for ISO-NE competitive transmission RFPs.",
+    },
+    {
+        "name": "Eversource (MA/CT/NH)",
+        "url": "https://www.eversource.com/content/ema/about/doing-business-with-us/vendors-suppliers/request-for-proposals",
+        "js_render": False,
+        "active": True,
+        "notes": "Regularly issues program evaluation and EM&V RFPs.",
+    },
+    {
+        "name": "Green Mountain Power",
+        "url": "https://greenmountainpower.com/regulatory/",
+        "js_render": False,
+        "active": True,
+        "notes": "GMP posts RFPs under regulatory filings page.",
+    },
+    {
+        "name": "National Grid (NY/NE)",
+        "url": "https://www.nationalgridus.com/Our-Company/Doing-Business-with-National-Grid/Procurement-Portal",
+        "js_render": True,
+        "active": True,
+        "notes": "JS-rendered portal. Phase 2 upgrade needed for full scraping.",
+    },
+    {
+        "name": "Avangrid / United Illuminating (CT)",
+        "url": "https://www.avangrid.com/our-company/procurement",
+        "js_render": True,
+        "active": True,
+        "notes": "CT utility. JS-rendered. Phase 2.",
+    },
+    # --- Mid-Atlantic / broader regional utilities ---
+    {
+        "name": "PJM Interconnection Solicitations",
+        "url": "https://www.pjm.com/about-pjm/who-we-are/vendor-information/solicitations",
+        "js_render": False,
+        "active": True,
+        "notes": "Mid-Atlantic ISO. Market and load studies.",
+    },
+    {
+        "name": "NYISO Procurement",
+        "url": "https://www.nyiso.com/vendor-registration",
+        "js_render": False,
+        "active": True,
+        "notes": "NY ISO. Evaluation and market studies.",
+    },
+    {
+        "name": "Efficiency Vermont",
+        "url": "https://www.efficiencyvermont.com/about/partners-vendors/rfp",
+        "js_render": False,
+        "active": False,
+        "notes": "Blocking scrapers (403). Monitor manually at efficiencyvermont.com.",
+    },
+    {
+        "name": "Efficiency Maine",
+        "url": "https://www.efficiencymaine.com/rfps/",
+        "js_render": False,
+        "active": True,
+        "notes": "Updated URL -- may need adjustment if still 404.",
+    },
+    {
+        "name": "Mass Save / EEAC",
+        "url": "https://www.masssave.com/about/requests-for-proposals",
+        "js_render": False,
+        "active": True,
+        "notes": "Updated URL -- MA energy efficiency program administrator.",
+    },
+    # --- National / DOE ecosystem ---
+    {
+        "name": "DOE EERE Funding Opportunities",
+        "url": "https://www.energy.gov/eere/funding-opportunities",
+        "js_render": False,
+        "active": True,
+        "notes": "DOE Office of Energy Efficiency. Broad national scope.",
+    },
+    {
+        "name": "EPA ENERGY STAR Solicitations",
+        "url": "https://www.energystar.gov/about/our_work/contracts_rfps",
+        "js_render": False,
+        "active": False,
+        "notes": "404 -- no confirmed replacement URL found. Disabled for now.",
+    },
+]
+
+# ---------------------------------------------------------------------------
+# STATE PROCUREMENT COVERAGE STRATEGY
+#
+# Layer 1 -- SAM.gov: Covers federal opportunities in any state.
+# Layer 2 -- Google CSE: Disabled until Google Cloud billing is configured.
+# Layer 3 -- Direct scrape of highest-priority state portals below.
+# ---------------------------------------------------------------------------
+
+STATE_PORTAL_DOMAINS_FOR_CSE = [
+    "vsigns.vermont.gov",
+    "commbuys.com",
+    "biznet.ct.gov",
+    "nyscr.ny.gov",
+    "maine.gov",
+    "das.nh.gov",
+    "caleprocure.ca.gov",
+    "energy.ca.gov",
+    "procurement.maryland.gov",
+    "eva.virginia.gov",
+    "ipp.illinois.gov",
+    "procurement.ohio.gov",
+    "purchasing.texas.gov",
+    "purchasing.colorado.gov",
+    "naseo.org",
+    "nyserda.ny.gov",
+]
+
+DIRECT_SCRAPE_STATES = [
+    {
+        "name": "Vermont VSIGNS",
+        "state": "VT",
+        "url": "https://vsigns.vermont.gov/bso/external/publicBids.sdo?tabcode=PUBLIC_RFPS",
+        "type": "vsigns",
+        "notes": "CxA home state. Most important direct scrape.",
+    },
+    {
+        "name": "Massachusetts COMMBUYS",
+        "state": "MA",
+        "url": "https://www.commbuys.com/bso/external/publicBids.sdo",
+        "type": "commbuys",
+        "notes": "Large EM&V market. DOER and utilities issue frequently here.",
+    },
+    {
+        "name": "NYSERDA Funding (direct)",
+        "state": "NY",
+        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Requests-for-Proposals",
+        "type": "generic_list",
+        "notes": "Also covered in UTILITY_SOURCES.",
+    },
+    {
+        "name": "California CaleProcure",
+        "state": "CA",
+        "url": "https://caleprocure.ca.gov/pages/public-search.aspx",
+        "type": "ca_eprocure",
+        "notes": "CEC issues large EM&V and program evaluation RFPs.",
+    },
+]
+
+GOOGLE_CSE_QUERIES = [
+    "evaluation measurement verification RFP",
+    "program evaluation energy efficiency RFP",
+    "EM&V services request for proposals",
+    "impact evaluation energy RFP",
+    "M&V measurement verification solicitation",
+    "energy savings verification RFP",
+    "baseline study energy efficiency RFP",
+    "DSM evaluation request for proposals",
+]
+
+# ---------------------------------------------------------------------------
+# SEEN OPPORTUNITIES STATE FILE (now stored in Supabase, not a file)
+# ---------------------------------------------------------------------------
+
+STATE_FILE_PATH    = "state/seen_opportunities.json"
+STATE_EXPIRY_DAYS  = 180
+
+# ---------------------------------------------------------------------------
+# EMAIL DELIVERY (SendGrid)
+# ---------------------------------------------------------------------------
+
+SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
+EMAIL_FROM           = "rfp-monitor@cx-associates.com"
+EMAIL_TO = [
+    "eric@cx-assoc.com",
+]
+EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
+
+# ---------------------------------------------------------------------------
+# GITHUB PAGES DASHBOARD
+# ---------------------------------------------------------------------------
+
+DASHBOARD_OUTPUT_PATH = "docs/index.html"
+DASHBOARD_MAX_DISPLAY = 150
+
+# ---------------------------------------------------------------------------
+# HTTP REQUEST SETTINGS
+# ---------------------------------------------------------------------------
+
+REQUEST_HEADERS = {
+    "User-Agent": (
+        "CxA-RFP-Monitor/1.0 "
+        "(Cx Associates commissioning firm; contact eric@cx-assoc.com)"
+    )
+}
+REQUEST_TIMEOUT       = 20
+REQUEST_DELAY_SECONDS = 2
+REQUEST_MAX_RETRIES   = 3
