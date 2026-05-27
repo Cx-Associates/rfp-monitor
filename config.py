@@ -267,14 +267,14 @@ UTILITY_SOURCES = [
     },
     {
         "name": "Efficiency Maine",
-        "url": "https://www.efficiencymaine.com/rfps/",
+        "url": "https://www.efficiencymaine.com/opportunities/",
         "js_render": False,
         "active": True,
         "notes": "Updated URL -- may need adjustment if still 404.",
     },
     {
         "name": "Mass Save / EEAC",
-        "url": "https://www.masssave.com/about/requests-for-proposals",
+        "url": "https://www.masssave.com/trade-partners/requests-for-proposals",
         "js_render": False,
         "active": True,
         "notes": "Updated URL -- MA energy efficiency program administrator.",
