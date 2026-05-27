@@ -427,7 +427,17 @@ def _scrape_generic_rfp_page(
         # Skip very short or navigation-only links
         if len(link_text) < 10:
             continue
-        if link_text.lower().strip() in {"home", "about", "contact", "login", "search", "menu"}:
+
+        # Skip junk link text -- page artifacts not RFP titles
+        # Add to this set if new junk patterns appear in results
+        JUNK_TITLES = {
+            "home", "about", "contact", "login", "search", "menu",
+            "click here", "here", "download", "view", "read more",
+            "appendix a", "appendix b", "appendix c", "appendix d",
+            "attachment", "exhibit", "more info", "learn more",
+            "back", "next", "previous", "submit", "apply",
+        }
+        if link_text.lower().strip() in JUNK_TITLES:
             continue
 
         link_lower = link_text.lower()
