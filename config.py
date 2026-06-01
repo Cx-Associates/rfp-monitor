@@ -160,6 +160,7 @@ SAM_NAICS_CODES = ["541690", "541620", "541330", "541712"]
 SAM_SEARCH_QUERIES = [
     "evaluation measurement verification",
     "M&V measurement verification",
+    "measurement verification energy",
     "program evaluation energy",
     "impact evaluation energy efficiency",
     "IPMVP",
@@ -168,7 +169,10 @@ SAM_SEARCH_QUERIES = [
     "DSM evaluation",
     "demand side management evaluation",
     "energy efficiency evaluation services",
+    "evaluation services energy efficiency",
     "utility program evaluation",
+    "demand response evaluation",
+    "load impact evaluation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -352,6 +356,21 @@ DIRECT_SCRAPE_STATES = [
         "type": "ca_eprocure",
         "notes": "CEC issues large EM&V and program evaluation RFPs.",
     },
+    {
+        "name": "Vermont DPS Requests for Proposals",
+        "url": "https://publicservice.vermont.gov/document-categories/requests-proposals",
+        "state": "VT",
+        "type": "generic_list",
+        "notes": ("Fallback Vermont DPS RFP page. Added because VSIGNS fails DNS resolution from GitHub/local environments.",
+                  "Currently returns 403 to the basic requests scraper; may require improved headers or manual monitoring.")
+    },
+    {
+        "name": "Vermont Business Registry Bid Search",
+        "url": "https://www.vermontbusinessregistry.com/bidsearch.aspx?type=1",
+        "state": "VT",
+        "type": "generic_list",
+        "notes":  "Broader Vermont statewide bid search fallback."
+    },
 ]
 
 GOOGLE_CSE_QUERIES = [
@@ -377,9 +396,9 @@ STATE_EXPIRY_DAYS  = 180
 # ---------------------------------------------------------------------------
 
 SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
-EMAIL_FROM           = "eric@cx-assoc.com"
+EMAIL_FROM           = "riazul.hoque@cx-assoc.com"
 EMAIL_TO = [
-    "eric@cx-assoc.com",
+    "riazul.hoque@cx-assoc.com",
 ]
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
