@@ -338,9 +338,9 @@ DIRECT_SCRAPE_STATES = [
     {
         "name": "Massachusetts COMMBUYS",
         "state": "MA",
-        "url": "https://www.commbuys.com/bso/external/publicBids.sdo",
+        "url": "https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true",
         "type": "commbuys",
-        "notes": "Large EM&V market. DOER and utilities issue frequently here.",
+        "notes": "Massachusetts public open-bid search. Uses a dedicated parser for bidDetail.sda links exposed in the COMMBUYS search results HTML.",
     },
     {
         "name": "NYSERDA Funding (direct)",

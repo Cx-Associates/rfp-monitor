@@ -315,17 +315,58 @@ def _scrape_vsigns(url: str, name: str, state: str) -> List[Opportunity]:
     return opps if opps else _scrape_generic_rfp_page(url, name, state)
 
 
+def _normalize_commbuys_date(value: str) -> Optional[str]:
+    """
+    COMMBUYS dates often include time, e.g. '06/24/2026 15:00:00'.
+    normalize_date() may not parse the full timestamp, so try the date
+    portion first.
+    """
+    value = clean_text(value)
+    if not value:
+        return None
+
+    direct = normalize_date(value)
+    if direct:
+        return direct
+
+    date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", value)
+    if date_match:
+        return normalize_date(date_match.group(0))
+
+    return None
+
+
 def _scrape_commbuys(url: str, name: str, state: str) -> List[Opportunity]:
     """
-    Scrape Massachusetts COMMBUYS public bid listing.
+    Scrape Massachusetts COMMBUYS public open bid search results.
 
-    COMMBUYS doesn't support keyword search on the public page; we fetch
-    all public bids and let the scorer filter for EM&V relevance.
+    Target page:
+      https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true
 
-    KNOWN FAILURE POINT: COMMBUYS may require a prior request to the
-    main site to establish a session cookie. Without the cookie, the public
-    bid listing may redirect to the homepage. The generic fallback handles
-    this by scraping whatever links appear on the page.
+    COMMBUYS previously used an older publicBids.sdo endpoint, but that URL now
+    returns 404. The current public search page exposes open bid detail links in
+    the HTML as anchors like:
+
+      /bso/external/bidDetail.sda?docId=BD-26-1211-MSBA-MASS-130091&external=true&parentUrl=close
+
+    This parser extracts those bid detail links and uses the surrounding table
+    row as description context.
+
+    Current COMMBUYS row layout:
+      - cell 0: doc ID
+      - cell 1: doc ID link
+      - cell 2: buyer / issuer organization
+      - cell 5: contact person
+      - cell 6: bid title / description
+      - cell 7: closing date / deadline
+      - cell 10: status
+
+    Known limitations:
+      - This parser relies on the current COMMBUYS table layout. If COMMBUYS
+        changes the result table or moves to JavaScript-only rendering, this
+        parser may need to be updated or replaced with Playwright.
+      - Posted date is not currently available from the visible row cells in the
+        search results page, so posted_date is left as None.
     """
     html = _fetch_page(url)
     if not html:
@@ -333,35 +374,90 @@ def _scrape_commbuys(url: str, name: str, state: str) -> List[Opportunity]:
 
     soup = BeautifulSoup(html, "html.parser")
     opps = []
+    seen_doc_ids = set()
 
-    # COMMBUYS typically wraps bids in a dataTable
-    rows = soup.select("table.dataTable tr, table tr")
-    for row in rows:
-        link = row.find("a", href=True)
-        if not link:
+    # Pattern for COMMBUYS bid IDs, e.g. BD-26-1211-MSBA-MASS-130091.
+    doc_id_pattern = re.compile(r"docId=(BD-[^&\s\"'>]+)", re.IGNORECASE)
+
+    for link in soup.find_all("a", href=True):
+        href = link.get("href", "")
+        link_text = clean_text(link.get_text(" ", strip=True))
+
+        # Keep only bid detail links; skip pagination, bid acknowledgement
+        # lists, login/help links, and other navigation.
+        if "bidDetail.sda" not in href:
             continue
 
-        title = clean_text(link.get_text(strip=True))
-        if len(title) < 10:
+        match = doc_id_pattern.search(href)
+        if not match:
             continue
 
-        absolute_url = urllib.parse.urljoin(url, link["href"])
-        row_text = row.get_text(separator=" ", strip=True)
-        deadline = _extract_deadline_from_text(row_text)
+        doc_id = match.group(1)
+        if doc_id in seen_doc_ids:
+            continue
+        seen_doc_ids.add(doc_id)
+
+        absolute_url = urllib.parse.urljoin(url, href)
+
+        # Use the nearest table row as source context for title, issuer,
+        # contact, and deadline.
+        row = link.find_parent("tr")
+        row_text = clean_text(row.get_text(" ", strip=True)) if row else link_text
+
+        cells = []
+        if row:
+            # Preserve empty cells because COMMBUYS uses fixed column positions.
+            # Removing blanks shifts the indexes and causes fields like status
+            # ("Sent") or "View List" to be misread as the bid title.
+            cells = [
+                clean_text(cell.get_text(" ", strip=True))
+                for cell in row.find_all(["td", "th"])
+            ]
+
+        # Guarded helper for fixed-position cell access.
+        def cell_at(index: int) -> str:
+            return cells[index] if len(cells) > index else ""
+
+        issuer = cell_at(2) or "Commonwealth of Massachusetts"
+        contact_name = cell_at(5)
+        title = cell_at(6) or link_text or doc_id
+        deadline = _normalize_commbuys_date(cell_at(7))
+        posted_date = None
+        status = cell_at(10)
+
+        # Final safety: do not allow status/navigation labels to become titles.
+        if title.lower() in {"sent", "view list", "f", "p", "n", "e"}:
+            title = link_text if link_text and link_text != doc_id else doc_id
+
+        description_parts = [
+            f"COMMBUYS ID: {doc_id}",
+            f"Issuer: {issuer}",
+        ]
+        if contact_name:
+            description_parts.append(f"Contact: {contact_name}")
+        if deadline:
+            description_parts.append(f"Deadline: {deadline}")
+        if status:
+            description_parts.append(f"Status: {status}")
+        if row_text:
+            description_parts.append(row_text)
+
+        description = clean_text(" | ".join(description_parts), max_length=1000)
 
         opps.append(Opportunity(
             source=name,
-            notice_id=absolute_url,
+            notice_id=doc_id,
             url=absolute_url,
             title=title,
-            description=clean_text(row_text),
-            issuer="Commonwealth of Massachusetts",
+            description=description,
+            issuer=issuer,
             state=state,
+            posted_date=posted_date,
             deadline=deadline,
         ))
 
-    return opps if opps else _scrape_generic_rfp_page(url, name, state)
-
+    logger.info(f"COMMBUYS dedicated parser: {len(opps)} entries parsed")
+    return opps
 
 def _scrape_ca_eprocure(url: str, name: str, state: str) -> List[Opportunity]:
     """
