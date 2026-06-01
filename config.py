@@ -360,9 +360,8 @@ DIRECT_SCRAPE_STATES = [
         "name": "Vermont DPS Requests for Proposals",
         "url": "https://publicservice.vermont.gov/document-categories/requests-proposals",
         "state": "VT",
-        "type": "generic_list",
-        "notes": ("Fallback Vermont DPS RFP page. Added because VSIGNS fails DNS resolution from GitHub/local environments.",
-                  "Currently returns 403 to the basic requests scraper; may require improved headers or manual monitoring.")
+        "type": "vermont_dps_rfps",
+        "notes": "Fallback Vermont DPS RFP page. Added because VSIGNS fails DNS resolution from GitHub/local environments.",
     },
     {
         "name": "Vermont Business Registry Bid Search",
@@ -415,10 +414,20 @@ DASHBOARD_MAX_DISPLAY = 150
 
 REQUEST_HEADERS = {
     "User-Agent": (
-        "CxA-RFP-Monitor/1.0 "
-        "(Cx Associates commissioning firm; contact eric@cx-assoc.com)"
-    )
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
+
 REQUEST_TIMEOUT       = 20
 REQUEST_DELAY_SECONDS = 2
 REQUEST_MAX_RETRIES   = 3

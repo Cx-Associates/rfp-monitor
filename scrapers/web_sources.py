@@ -237,6 +237,8 @@ def _scrape_by_type(
         return _scrape_commbuys(url, name, state)
     elif ptype == "ca_eprocure":
         return _scrape_ca_eprocure(url, name, state)
+    elif ptype == "vermont_dps_rfps":
+        return _scrape_vermont_dps_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -479,6 +481,155 @@ def _scrape_generic_rfp_page(
 
     return opps
 
+def _scrape_vermont_dps_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the Vermont Department of Public Service Requests for Proposals page.
+
+    The generic link scraper is too broad for this page because it captures
+    navigation and sidebar links that contain energy-related terms. This parser
+    limits extraction to the main content area and only keeps links that look
+    like actual RFP/proposal postings.
+
+    Target page:
+      https://publicservice.vermont.gov/document-categories/requests-proposals
+
+    Notes:
+      - Vermont DPS often posts both a document landing page and a direct PDF
+        for the same RFP. To avoid duplicate opportunities, this parser keeps
+        the DPS document landing pages and skips direct /sites/dps/files/ PDF
+        links.
+      - Q&A/addendum/response documents are intentionally excluded as standalone
+        opportunities. They are useful supporting documents, but they usually
+        duplicate an already-posted RFP and can create noise in the digest.
+      - Deadline extraction is currently limited to text visible on the listing
+        page or nearby HTML container. Many DPS deadlines may only appear inside
+        the linked PDF, so deadline may remain None.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Prefer the main page content to avoid sidebar/header/footer navigation.
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main-content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".region-content")
+        or soup.select_one(".view-content")
+        or soup
+    )
+
+    # Keep only links that look like original RFP/proposal postings.
+    include_terms = [
+        "rfp",
+        "request for proposal",
+        "request for proposals",
+    ]
+
+    # Exclude supporting documents that are not standalone opportunities.
+    # These are useful after someone opens the RFP, but should not create
+    # separate digest entries.
+    support_doc_terms = [
+        "question and answer",
+        "questions and answers",
+        "responses to questions",
+        "response to questions",
+        "q&a",
+        "addendum",
+        "addenda",
+    ]
+
+    # Exclude common navigation/sidebar/footer links and general program pages.
+    # These may contain energy-related terms and can pass broad scoring if not
+    # filtered out before creating Opportunity objects.
+    exclude_terms = [
+        "skip to main content",
+        "home",
+        "careers",
+        "about us",
+        "document library",
+        "public advocacy",
+        "regulated utilities",
+        "energy efficiency utilities",
+        "efficiency",
+        "renewables",
+        "telecommunications and connectivity",
+        "consumer information",
+        "vermont energy atlas",
+        "vermont energy saver",
+        "electric vehicle public charging map",
+        "clean energy development fund",
+        "building energy standards",
+        "read more",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    # Vermont DPS listing titles are regular links in the page content.
+    # We inspect links, but only keep those with original RFP/proposal-like
+    # title text and skip supporting documents/direct PDFs that duplicate the
+    # document landing pages.
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True))
+        if not title or len(title) < 10:
+            continue
+
+        title_l = title.lower()
+        absolute_url = urllib.parse.urljoin(url, link["href"])
+        absolute_url_l = absolute_url.lower()
+
+        # Skip obvious navigation/program links.
+        if any(term in title_l for term in exclude_terms):
+            continue
+
+        # Skip Q&A/addendum/response documents as standalone opportunities.
+        if any(term in title_l for term in support_doc_terms):
+            continue
+
+        # Skip direct DPS file/PDF links because the same RFP usually also has
+        # a cleaner DPS document landing page. This reduces duplicate entries.
+        if "/sites/dps/files/" in absolute_url_l:
+            continue
+
+        # Keep only original RFP/proposal-looking links.
+        if not any(term in title_l for term in include_terms):
+            continue
+
+        # Avoid duplicate entries if the same document link appears more than once.
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        # Use a nearby container for description/deadline context.
+        container = (
+            link.find_parent("article")
+            or link.find_parent("div", class_=lambda c: c and "views-row" in c)
+            or link.find_parent("div")
+            or link.parent
+        )
+
+        entry_text = ""
+        if container:
+            entry_text = clean_text(container.get_text(" ", strip=True))
+
+        deadline = _extract_deadline_from_text(entry_text)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=entry_text or title,
+            issuer="Vermont Department of Public Service",
+            state=state,
+            deadline=deadline,
+        ))
+
+    logger.info(f"Vermont DPS dedicated parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 # ---------------------------------------------------------------------------
 # HTTP utilities
