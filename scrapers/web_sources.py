@@ -34,6 +34,7 @@ import logging
 import time
 import urllib.parse
 from typing import List, Optional
+import re
 
 import requests
 from bs4 import BeautifulSoup
@@ -239,6 +240,8 @@ def _scrape_by_type(
         return _scrape_ca_eprocure(url, name, state)
     elif ptype == "vermont_dps_rfps":
         return _scrape_vermont_dps_rfps(url, name, state)
+    elif ptype == "vermont_business_registry":
+        return _scrape_vermont_business_registry(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -481,6 +484,10 @@ def _scrape_generic_rfp_page(
 
     return opps
 
+# ---------------------------------------------------------------------------
+# Vermont-specific scrapers
+# ---------------------------------------------------------------------------
+
 def _scrape_vermont_dps_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
     Scrape the Vermont Department of Public Service Requests for Proposals page.
@@ -629,6 +636,155 @@ def _scrape_vermont_dps_rfps(url: str, name: str, state: str) -> List[Opportunit
         ))
 
     logger.info(f"Vermont DPS dedicated parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+def _scrape_vermont_business_registry(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the Vermont Business Registry and Bid System open bid search page.
+
+    Target page:
+      https://www.vermontbusinessregistry.com/bidsearch.aspx?type=1
+
+    The generic link scraper does not work well for this page because bid links
+    are not normal hrefs. They are JavaScript calls like:
+
+      javascript:openPrintView('BidPreview.aspx?BidID=73790', 'Window73790');
+
+    This parser extracts the BidID from those JavaScript links and converts each
+    one into a direct BidPreview.aspx URL. It also attempts to pull nearby row
+    text for issuer and deadline context.
+
+    Notes:
+      - This source is intentionally broad. It includes statewide, municipal,
+        federal, private, and sources-sought bids shown by the registry.
+      - The scorer is responsible for filtering broad bid results down to
+        energy/evaluation/EM&V-relevant opportunities.
+      - The page is ASP.NET-generated and table-heavy, so this parser uses
+        link pattern extraction plus nearby table-row context rather than
+        relying on stable CSS classes.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    opportunities = []
+    seen_bid_ids = set()
+
+    # Pattern for:
+    # javascript:openPrintView('BidPreview.aspx?BidID=73790', 'Window73790');
+    bid_pattern = re.compile(r"BidPreview\.aspx\?BidID=(\d+)", re.IGNORECASE)
+
+    for link in soup.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True))
+        href = link.get("href", "")
+
+        if not title or len(title) < 5:
+            continue
+
+        match = bid_pattern.search(href)
+        if not match:
+            continue
+
+        bid_id = match.group(1)
+        if bid_id in seen_bid_ids:
+            continue
+        seen_bid_ids.add(bid_id)
+
+        bid_url = urllib.parse.urljoin(url, f"/BidPreview.aspx?BidID={bid_id}")
+
+        # Try to use the surrounding table row for posted date, issuer, and
+        # close date. The page is generated from nested ASP.NET tables, so the
+        # row structure may vary, but the nearest <tr> is still the best local
+        # context.
+        row = link.find_parent("tr")
+        row_text = clean_text(row.get_text(" ", strip=True)) if row else title
+
+        # Extract all cell text from the row. The visible bid list appears to
+        # include posted date, title, bid/code, issuer, and closing date.
+        cells = []
+        if row:
+            cells = [
+                clean_text(cell.get_text(" ", strip=True))
+                for cell in row.find_all(["td", "th"])
+            ]
+            cells = [c for c in cells if c]
+
+        # Default values if row parsing is incomplete.
+        issuer = "Vermont Business Registry"
+        posted_date = None
+        deadline = _extract_deadline_from_text(row_text)
+
+        # Heuristic extraction:
+        # The row often contains title + issuer + close date, but because this
+        # is table-heavy ASP.NET markup, cell positions may not always be stable.
+        # Use the title cell as an anchor, then look for dates and likely issuer
+        # text in the remaining cells.
+        date_candidates = []
+        for cell_text in cells:
+            normalized_date = normalize_date(cell_text)
+            if normalized_date:
+                date_candidates.append(normalized_date)
+
+        if date_candidates:
+            # The first date is usually the posted date; the last date is usually
+            # the close/deadline date.
+            posted_date = date_candidates[0]
+            deadline = date_candidates[-1]
+
+        # Pick the longest non-date, non-title-ish cell after the title as issuer.
+        # This avoids assigning short bid codes as the issuer where possible.
+        non_date_cells = []
+        for cell_text in cells:
+            if normalize_date(cell_text):
+                continue
+            if cell_text == title:
+                continue
+            if bid_id in cell_text:
+                continue
+            non_date_cells.append(cell_text)
+
+        if non_date_cells:
+            # Prefer a cell that looks like an agency/department/municipality name.
+            # Fall back to the longest remaining cell.
+            issuer_candidates = [
+                c for c in non_date_cells
+                if any(token in c.lower() for token in [
+                    "department",
+                    "agency",
+                    "office",
+                    "town",
+                    "city",
+                    "village",
+                    "state of",
+                    "division",
+                    "district",
+                    "commission",
+                    "county",
+                ])
+            ]
+            issuer = (
+                max(issuer_candidates, key=len)
+                if issuer_candidates
+                else max(non_date_cells, key=len)
+            )
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=bid_id,
+            url=bid_url,
+            title=title,
+            description=row_text or title,
+            issuer=issuer,
+            state=state,
+            posted_date=posted_date,
+            deadline=deadline,
+        ))
+
+    logger.info(
+        f"Vermont Business Registry dedicated parser: "
+        f"{len(opportunities)} entries parsed"
+    )
     return opportunities
 
 # ---------------------------------------------------------------------------

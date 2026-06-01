@@ -367,7 +367,7 @@ DIRECT_SCRAPE_STATES = [
         "name": "Vermont Business Registry Bid Search",
         "url": "https://www.vermontbusinessregistry.com/bidsearch.aspx?type=1",
         "state": "VT",
-        "type": "generic_list",
+        "type": "vermont_business_registry",
         "notes":  "Broader Vermont statewide bid search fallback."
     },
 ]
