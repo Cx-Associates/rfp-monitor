@@ -4,6 +4,7 @@ Automated weekly scanner for EM&V (Evaluation, Measurement & Verification) and r
 
 Runs every Monday at 7am ET via GitHub Actions. Results are delivered by email digest to configured recipients.
 
+
 ---
 
 ## What It Does
