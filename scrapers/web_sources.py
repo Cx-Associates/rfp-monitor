@@ -141,16 +141,23 @@ def fetch_direct_scrape_states() -> List[Opportunity]:
 
 def fetch_naseo() -> List[Opportunity]:
     """
-    Scrape the NASEO RFP board at https://www.naseo.org/rfps
+    Scrape the NASEO RFP board at https://www.naseo.org/rfps.
 
-    NASEO posts RFPs from state energy offices nationally and is one of the
-    most reliable sources for evaluation work outside of SAM.gov.
+    NASEO posts RFPs/RFIs from state energy offices nationally and is one of
+    the most reliable sources for energy-office procurement opportunities.
 
-    Tries several CSS selector patterns corresponding to different versions
-    of NASEO's CMS. Falls back to the generic link scraper on failure.
+    The previous implementation fell back to the generic link scraper when
+    structured selectors failed. That was too broad for this page because it
+    captured:
+      - navigation links,
+      - closed RFPs,
+      - appendix/supporting document links,
+      - "click here" / "here" links,
+      - duplicate links within the same listing.
 
-    KNOWN FAILURE POINT: NASEO redesigned their site in 2024. Update the
-    selector list below if this scraper consistently returns 0 results.
+    This parser instead targets only the "Open RFIs and RFPs" section and
+    creates one Opportunity per top-level list item. It intentionally ignores
+    the "Closed RFPs, RFRs, and RFIs" section.
     """
     url = "https://www.naseo.org/rfps"
     html = _fetch_page(url)
@@ -158,57 +165,116 @@ def fetch_naseo() -> List[Opportunity]:
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    opportunities = []
 
-    # Try selectors corresponding to different NASEO CMS versions
-    # KNOWN FAILURE POINT: Add new selectors here if NASEO redesigns again
-    entry_selectors = [
-        "div.field--name-body",     # 2024 redesign
-        "article.rfp",              # Older design
-        "div.views-row",            # Drupal views pattern
-        "li.rfp-item",              # Another Drupal pattern
-        "div.node--type-rfp",       # Node-based Drupal
-        "article",                  # Last resort before generic fallback
-    ]
+    # Prefer the main content block if present. This avoids header, menu,
+    # footer, and mega-menu links.
+    main_content = (
+        soup.select_one("#ctl00_mainContent_ctl00_divContent")
+        or soup.select_one("main")
+        or soup.select_one("#main-content")
+        or soup.select_one(".main-content")
+        or soup
+    )
 
-    entries = []
-    for selector in entry_selectors:
-        entries = soup.select(selector)
-        if entries:
-            logger.debug(f"NASEO: matched selector '{selector}' ({len(entries)} entries)")
+    # Find the "Open RFIs and RFPs" heading.
+    open_heading = None
+    for heading in main_content.find_all(["h1", "h2", "h3"]):
+        heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
+        if "open" in heading_text and ("rfp" in heading_text or "rfi" in heading_text):
+            open_heading = heading
             break
 
-    if not entries:
-        logger.info("NASEO: no structured entries found; using generic link scraper")
-        return _scrape_generic_rfp_page(url, "NASEO RFP Board", state="")
+    if not open_heading:
+        logger.info("NASEO: no Open RFIs/RFPs heading found")
+        return []
 
-    for entry in entries:
-        link = entry.find("a", href=True)
-        if not link:
+    # The open opportunities are usually in the first <ul> after the heading.
+    # Stop before the closed section.
+    open_list = None
+    for sibling in open_heading.find_next_siblings():
+        if sibling.name in ["h1", "h2", "h3"]:
+            sibling_text = clean_text(sibling.get_text(" ", strip=True)).lower()
+            if "closed" in sibling_text:
+                break
+
+        if sibling.name == "ul":
+            open_list = sibling
+            break
+
+    if not open_list:
+        logger.info("NASEO: no open RFP/RFI list found")
+        return []
+
+    opportunities = []
+    seen_urls = set()
+
+    support_link_text = {
+        "here",
+        "click here",
+        "full rfp",
+        "appendix a",
+        "appendix b",
+        "appendix c",
+        "questions and answers",
+        "q&a",
+    }
+
+    for item in open_list.find_all("li", recursive=False):
+        item_text = clean_text(item.get_text(" ", strip=True), max_length=1000)
+        if not item_text:
             continue
 
-        title_text = link.get_text(strip=True)
-        if not title_text or len(title_text) < 10:
-            # If link text is too short, try the full entry text
-            title_text = entry.get_text(separator=" ", strip=True)[:200]
+        # Pick the first meaningful link in the listing. NASEO listings often
+        # contain multiple links: the main RFP, an addendum, "here", appendix
+        # files, and email links. We want one opportunity per listing.
+        chosen_link = None
+        for link in item.find_all("a", href=True):
+            link_text = clean_text(link.get_text(" ", strip=True))
+            href = link.get("href", "")
 
-        href = urllib.parse.urljoin(url, link["href"])
-        entry_text = entry.get_text(separator=" ", strip=True)
-        deadline = _extract_deadline_from_text(entry_text)
+            if not link_text or len(link_text) < 5:
+                continue
 
-        opp = Opportunity(
+            if link_text.lower() in support_link_text:
+                continue
+
+            if href.startswith("mailto:"):
+                continue
+
+            absolute_url = urllib.parse.urljoin(url, href)
+
+            if not absolute_url.startswith(("http://", "https://")):
+                continue
+
+            chosen_link = (link_text, absolute_url)
+            break
+
+        # If the item has no useful anchor, use the first part of the item text
+        # as the title and the NASEO RFP page as the URL.
+        if chosen_link:
+            title, href = chosen_link
+        else:
+            title = item_text[:200]
+            href = url
+
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+
+        deadline = _extract_naseo_deadline_from_text(item_text)
+
+        opportunities.append(Opportunity(
             source="NASEO RFP Board",
             notice_id=href,
             url=href,
-            title=clean_text(title_text),
-            description=clean_text(entry_text),
+            title=clean_text(title, max_length=300),
+            description=item_text,
             issuer="NASEO / State Energy Office",
             deadline=deadline,
-            state="",   # NASEO posts national and state-specific -- scorer handles
-        )
-        opportunities.append(opp)
+            state="",
+        ))
 
-    logger.info(f"NASEO: {len(opportunities)} entries parsed")
+    logger.info(f"NASEO open RFP parser: {len(opportunities)} entries parsed")
     return opportunities
 
 
@@ -1109,3 +1175,47 @@ def _extract_deadline_from_text(text: str) -> Optional[str]:
     if match:
         return norm(match.group(1))
     return None
+
+def _extract_naseo_deadline_from_text(text: str) -> Optional[str]:
+    """
+    Extract deadline dates from NASEO listing text.
+
+    NASEO listings often use phrasing such as:
+      - "must be received by May 28, 2026..."
+      - "postmarked on May 28, 2026..."
+      - "received no later than June 8, 2026..."
+
+    The generic deadline extractor may miss these because the sentence can
+    include multiple deadlines and location-specific instructions. For NASEO,
+    use the latest parsed date near deadline-like language as the practical
+    deadline candidate.
+    """
+    if not text:
+        return None
+
+    date_pattern = r"(\b[A-Z][a-z]+ \d{1,2}, \d{4}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b)"
+
+    trigger_window_pattern = (
+        r"(?:due|deadline|received by|must be received by|received no later than|"
+        r"postmarked on|postmarked by|responses must be submitted|proposals must be submitted)"
+        r".{0,150}?"
+        + date_pattern
+    )
+
+    matches = re.findall(trigger_window_pattern, text, flags=re.IGNORECASE)
+
+    normalized_dates = []
+    for match in matches:
+        # re.findall returns strings when there is one capturing group, but
+        # tuples if the regex changes later. Keep this guarded.
+        date_text = match if isinstance(match, str) else match[-1]
+        normalized = normalize_date(date_text)
+        if normalized:
+            normalized_dates.append(normalized)
+
+    if normalized_dates:
+        # Use latest date because NASEO sometimes gives one date for local
+        # proposers and a later received-by date for out-of-area proposers.
+        return max(normalized_dates)
+
+    return _extract_deadline_from_text(text)
