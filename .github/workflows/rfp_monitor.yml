@@ -34,11 +34,24 @@ on:
           - "false"
           - "true"
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   monitor:
     name: RFP Monitor Run
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -57,12 +70,12 @@ jobs:
 
       - name: Run RFP Monitor
         env:
-          SAM_API_KEY:      ${{ secrets.SAM_API_KEY }}
+          SAM_API_KEY: ${{ secrets.SAM_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-          GOOGLE_CSE_KEY:   ${{ secrets.GOOGLE_CSE_KEY }}
-          GOOGLE_CSE_ID:    ${{ secrets.GOOGLE_CSE_ID }}
-          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+          GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           mkdir -p scrapers
           touch scrapers/__init__.py
@@ -81,3 +94,18 @@ jobs:
 
           echo "Executing: $CMD"
           $CMD
+
+      - name: Configure GitHub Pages
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard artifact
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy dashboard to GitHub Pages
+        id: deployment
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        uses: actions/deploy-pages@v4
