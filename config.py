@@ -419,9 +419,10 @@ STATE_EXPIRY_DAYS  = 180
 # ---------------------------------------------------------------------------
 
 SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
-EMAIL_FROM           = "riazul.hoque@cx-assoc.com"
+EMAIL_FROM           = "eric@cx-assoc.com"
 EMAIL_TO = [
     "riazul.hoque@cx-assoc.com",
+    "eric@cx-assoc.com",
 ]
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 

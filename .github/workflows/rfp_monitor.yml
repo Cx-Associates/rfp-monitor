@@ -33,6 +33,14 @@ on:
         options:
           - "false"
           - "true"
+      send_email:
+        description: "Send email digest"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: read
@@ -71,7 +79,7 @@ jobs:
       - name: Run RFP Monitor
         env:
           SAM_API_KEY: ${{ secrets.SAM_API_KEY }}
-#          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_API_KEY: ${{ (github.event_name == 'schedule' || github.event.inputs.send_email == 'true') && secrets.SENDGRID_API_KEY || '' }}
           GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
