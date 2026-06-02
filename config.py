@@ -263,11 +263,16 @@ UTILITY_SOURCES = [
         "notes": "NY ISO. Evaluation and market studies.",
     },
     {
-        "name": "Efficiency Vermont",
-        "url": "https://www.efficiencyvermont.com/about/partners-vendors/rfp",
+        "name": "VEIC & Efficiency Vermont",
+        "url": "https://www.veic.org/organization/rfps",
+        "state": "VT",
+        "type": "veic_rfps",
         "js_render": False,
-        "active": False,
-        "notes": "Blocking scrapers (403). Monitor manually at efficiencyvermont.com.",
+        "active": True,
+        "notes": (
+            "VEIC RFP page, including Efficiency Vermont RFPs"
+            "Efficiency Vermont's own RFP page points users to VEIC for current opportunities."
+        ),
     },
     {
         "name": "Efficiency Maine",

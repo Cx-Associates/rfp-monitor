@@ -70,9 +70,11 @@ def fetch_utility_sources() -> List[Opportunity]:
     all_opps = []
 
     for src in config.UTILITY_SOURCES:
-        name      = src["name"]
-        url       = src["url"]
-        active    = src.get("active", True)
+        name = src["name"]
+        url = src["url"]
+        state = src.get("state", "")
+        ptype = src.get("type", "generic_list")
+        active = src.get("active", True)
         js_render = src.get("js_render", False)
 
         if not active:
@@ -84,7 +86,7 @@ def fetch_utility_sources() -> List[Opportunity]:
 
         logger.info(f"Scraping utility source: {name}")
         try:
-            opps = _scrape_generic_rfp_page(url, source_name=name, state="")
+            opps = _scrape_by_type(url, ptype, name, state)
             logger.info(f"  {name}: {len(opps)} candidates")
             all_opps.extend(opps)
         except Exception as e:
@@ -242,6 +244,8 @@ def _scrape_by_type(
         return _scrape_vermont_dps_rfps(url, name, state)
     elif ptype == "vermont_business_registry":
         return _scrape_vermont_business_registry(url, name, state)
+    elif ptype == "veic_rfps":
+        return _scrape_veic_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -881,6 +885,120 @@ def _scrape_vermont_business_registry(url: str, name: str, state: str) -> List[O
         f"Vermont Business Registry dedicated parser: "
         f"{len(opportunities)} entries parsed"
     )
+    return opportunities
+
+def _scrape_veic_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the VEIC RFP page, which also lists current Efficiency Vermont
+    RFPs/RFQs/RFIs.
+
+    Target page:
+      https://www.veic.org/organization/rfps
+
+    VEIC's page is currently accessible by the requests-based scraper. When
+    there are no active opportunities, the page may contain mostly navigation
+    links and a message indicating there are no active RFPs. This parser avoids
+    returning navigation links and only emits links that look like actual
+    RFP/RFQ/RFI opportunities.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    page_text = clean_text(soup.get_text(" ", strip=True)).lower()
+
+    no_active_markers = [
+        "there are currently no active rfps",
+        "no active rfps",
+        "no current rfps",
+        "no open requests",
+    ]
+
+    if any(marker in page_text for marker in no_active_markers):
+        logger.info("VEIC RFPs: no active RFPs detected on page")
+        return []
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#main-content")
+        or soup.select_one(".main-content")
+        or soup
+    )
+
+    include_terms = [
+        "rfp",
+        "rfq",
+        "rfi",
+        "request for proposal",
+        "request for proposals",
+        "request for qualification",
+        "request for qualifications",
+        "request for information",
+    ]
+
+    exclude_terms = [
+        "skip to main content",
+        "privacy policy",
+        "conflict of interest policy",
+        "contact us",
+        "careers",
+        "case studies",
+        "reports & insights",
+        "our capabilities",
+        "our organization",
+        "who we work with",
+        "connect with us",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True))
+        if not title or len(title) < 5:
+            continue
+
+        title_l = title.lower()
+
+        if any(term in title_l for term in exclude_terms):
+            continue
+
+        href = link.get("href", "")
+        absolute_url = urllib.parse.urljoin(url, href)
+
+        if not absolute_url.startswith(("http://", "https://")):
+            continue
+
+        parent_text = clean_text(
+            link.parent.get_text(" ", strip=True),
+            max_length=500,
+        ) if link.parent else title
+
+        combined_l = f"{title} {parent_text}".lower()
+
+        if not any(term in combined_l for term in include_terms):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        deadline = _extract_deadline_from_text(parent_text)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=parent_text or title,
+            issuer="VEIC / Efficiency Vermont",
+            state=state,
+            deadline=deadline,
+        ))
+
+    logger.info(f"VEIC RFP dedicated parser: {len(opportunities)} entries parsed")
     return opportunities
 
 # ---------------------------------------------------------------------------
