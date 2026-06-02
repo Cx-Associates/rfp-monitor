@@ -21,7 +21,7 @@ CLI flags:
   --force-all            Ignore seen-set; report all passing opportunities.
                          Use carefully -- creates duplicate email entries.
   --sources [...]        Comma-separated: sam, utilities, states_direct,
-                         google_cse, all. Default: all.
+                       google_cse (disabled), all. Default: all.
   --debug                Enable DEBUG logging (very verbose).
 
 Exit codes:
@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help=(
             "Comma-separated list of sources: "
-            "sam, utilities, states_direct, google_cse, all"
+            "sam, utilities, states_direct, google_cse (disabled), all"
         ),
     )
     p.add_argument(
@@ -154,21 +154,38 @@ def run_scrapers(source_str: str) -> List:
     run_source("Priority State Portals (direct)", "states_direct", fetch_direct_scrape_states)
 
     # Google CSE (broad US state portal coverage via search API)
-    # NOTE: Disabled until Google Cloud billing account is configured.
-    # The 403 errors indicate the API key is not authorized for use without
-    # a billing account attached to the Google Cloud project.
-    # To re-enable: set up billing at console.cloud.google.com and change
-    # the condition below back to: "google_cse" in source_list
-    if False:  # Disabled -- remove this line and uncomment below to re-enable
-        from scrapers.google_cse import fetch_google_cse_results
-        run_source("Google CSE (State Portals)", "google_cse", fetch_google_cse_results)
+    # Uses GOOGLE_CSE_KEY and GOOGLE_CSE_ID from environment variables /
+    # GitHub Actions secrets. The fetcher will skip gracefully if either
+    # credential is missing.
+    # from scrapers.google_cse import fetch_google_cse_results
+    # run_source("Google CSE (State Portals)", "google_cse", fetch_google_cse_results)
+    #
+    # logger.info(f"{'='*55}")
+    # logger.info(f"All scrapers complete. Total raw: {len(raw_opps)}")
+    # logger.info(f"{'='*55}")
+    #
+    # return raw_opps
+
+    # Google CSE (State Portals)
+    # NOTE: Tested June 2026. Google Custom Search JSON API returned 403
+    # permission errors for the new CxA rfp-monitor Google Cloud project even
+    # after enabling the API, creating a Programmable Search Engine, creating
+    # an API key, and upgrading billing. Google documentation now says Custom
+    # Search JSON API is closed to new customers. Keep this disabled unless CxA
+    # has access through an older eligible Google Cloud project/API key.
+    if "google_cse" in sources:
+        logger.warning(
+            "Google CSE was requested, but it is disabled because Google "
+            "Custom Search JSON API is closed to new customers / blocked for "
+            "this project. Use direct scrapers or an eligible older Google "
+            "Cloud project if available."
+        )
 
     logger.info(f"{'='*55}")
     logger.info(f"All scrapers complete. Total raw: {len(raw_opps)}")
     logger.info(f"{'='*55}")
 
     return raw_opps
-
 
 def main():
     """Full monitoring cycle. See module docstring for step-by-step."""
@@ -196,8 +213,11 @@ def main():
     # load_seen_set() pulls the remaining rows into a local dict for fast lookup
     # -------------------------------------------------------------------------
     from dedup import load_seen_set, expire_old_entries
-    expire_old_entries()        # Clean up old rows first
-    seen = load_seen_set()      # Then load what remains
+    if args.dry_run:
+        seen = {}
+    else:
+        expire_old_entries()        # Clean up old rows first
+        seen = load_seen_set()      # Then load what remains
 
     # -------------------------------------------------------------------------
     # Step 2: Scrape all sources
@@ -221,17 +241,23 @@ def main():
     logger.info("=" * 55)
     logger.info(f"SCORING (mode={mode})")
     logger.info("=" * 55)
-    from scorer import filter_and_sort
-    scored = filter_and_sort(raw_opps, mode=mode)
+    from scorer import score_split_and_sort, filter_manual_review_candidates
+    scored, manual_review, all_scored = score_split_and_sort(raw_opps, mode=mode)
+    manual_review = filter_manual_review_candidates(manual_review)
 
     if not scored:
         logger.info(
             f"No opportunities passed the relevance threshold "
-            f"(mode={mode}). Generating empty dashboard."
+            f"(mode={mode}). Generating dashboard with manual-review candidates."
         )
         if not args.dry_run:
             from delivery import generate_dashboard
-            generate_dashboard([], [], mode=mode)
+            generate_dashboard(
+                [],
+                [],
+                mode=mode,
+                manual_review=manual_review,
+            )
         sys.exit(0)
 
     # -------------------------------------------------------------------------
@@ -274,7 +300,12 @@ def main():
     from delivery import send_email_digest, generate_dashboard
 
     email_ok    = send_email_digest(new_opps, mode=mode)
-    dashboard_ok = generate_dashboard(new_opps, scored, mode=mode)
+    dashboard_ok = generate_dashboard(
+        new_opps,
+        scored,
+        mode=mode,
+        manual_review=manual_review,
+    )
 
     logger.info(
         f"Delivery: email={'OK' if email_ok else 'FAILED'} | "

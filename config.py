@@ -160,6 +160,7 @@ SAM_NAICS_CODES = ["541690", "541620", "541330", "541712"]
 SAM_SEARCH_QUERIES = [
     "evaluation measurement verification",
     "M&V measurement verification",
+    "measurement verification energy",
     "program evaluation energy",
     "impact evaluation energy efficiency",
     "IPMVP",
@@ -168,7 +169,10 @@ SAM_SEARCH_QUERIES = [
     "DSM evaluation",
     "demand side management evaluation",
     "energy efficiency evaluation services",
+    "evaluation services energy efficiency",
     "utility program evaluation",
+    "demand response evaluation",
+    "load impact evaluation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -182,9 +186,13 @@ UTILITY_SOURCES = [
     {
         "name": "NEEP (Northeast Energy Efficiency Partnerships)",
         "url": "https://neep.org/about/requests-proposals",
+        "state": "",
+        "type": "neep_rfps",
         "js_render": False,
         "active": True,
-        "notes": "Confirmed URL. Lists RFPs NEEP has issued directly.",
+        "notes": (
+            "NEEP RFP page. Uses a dedicated parser to avoid informational pages."
+        ),
     },
     {
         "name": "ACEEE",
@@ -243,6 +251,18 @@ UTILITY_SOURCES = [
         "active": True,
         "notes": "CT utility. JS-rendered. Phase 2.",
     },
+    {
+        "name": "VEIC & Efficiency Vermont",
+        "url": "https://www.veic.org/organization/rfps",
+        "state": "VT",
+        "type": "veic_rfps",
+        "js_render": False,
+        "active": True,
+        "notes": (
+            "VEIC RFP page, including Efficiency Vermont RFPs"
+            "Efficiency Vermont's own RFP page points users to VEIC for current opportunities."
+        ),
+    },
     # --- Mid-Atlantic / broader regional utilities ---
     {
         "name": "PJM Interconnection Solicitations",
@@ -259,18 +279,26 @@ UTILITY_SOURCES = [
         "notes": "NY ISO. Evaluation and market studies.",
     },
     {
-        "name": "Efficiency Vermont",
-        "url": "https://www.efficiencyvermont.com/about/partners-vendors/rfp",
+        "name": "AESP Active RFPs",
+        "url": "https://aesp.org/community/news-and-rpfs/",
+        "state": "",
+        "type": "aesp_rfps",
         "js_render": False,
-        "active": False,
-        "notes": "Blocking scrapers (403). Monitor manually at efficiencyvermont.com.",
+        "active": True,
+        "notes": (
+            "AESP member news and active RFP/RFQ/RFI page. Dedicated parser should "
+            "only capture the Active RFPs, RFQs, and RFIs section and stop before "
+            "Members news."
+        ),
     },
     {
         "name": "Efficiency Maine",
         "url": "https://www.efficiencymaine.com/opportunities/",
+        "state": "ME",
+        "type": "efficiency_maine_rfps",
         "js_render": False,
         "active": True,
-        "notes": "Updated URL -- may need adjustment if still 404.",
+        "notes": "Efficiency Maine opportunity/RFP page. Uses dedicated parser to extract detail-page deadlines.",
     },
     {
         "name": "Mass Save / EEAC",
@@ -334,9 +362,9 @@ DIRECT_SCRAPE_STATES = [
     {
         "name": "Massachusetts COMMBUYS",
         "state": "MA",
-        "url": "https://www.commbuys.com/bso/external/publicBids.sdo",
+        "url": "https://www.commbuys.com/bso/view/search/external/advancedSearchBid.xhtml?openBids=true",
         "type": "commbuys",
-        "notes": "Large EM&V market. DOER and utilities issue frequently here.",
+        "notes": "Massachusetts public open-bid search. Uses a dedicated parser for bidDetail.sda links exposed in the COMMBUYS search results HTML.",
     },
     {
         "name": "NYSERDA Funding (direct)",
@@ -351,6 +379,20 @@ DIRECT_SCRAPE_STATES = [
         "url": "https://caleprocure.ca.gov/pages/public-search.aspx",
         "type": "ca_eprocure",
         "notes": "CEC issues large EM&V and program evaluation RFPs.",
+    },
+    {
+        "name": "Vermont DPS Requests for Proposals",
+        "url": "https://publicservice.vermont.gov/document-categories/requests-proposals",
+        "state": "VT",
+        "type": "vermont_dps_rfps",
+        "notes": "Fallback Vermont DPS RFP page. Added because VSIGNS fails DNS resolution from GitHub/local environments.",
+    },
+    {
+        "name": "Vermont Business Registry Bid Search",
+        "url": "https://www.vermontbusinessregistry.com/bidsearch.aspx?type=1",
+        "state": "VT",
+        "type": "vermont_business_registry",
+        "notes":  "Broader Vermont statewide bid search fallback."
     },
 ]
 
@@ -379,6 +421,7 @@ STATE_EXPIRY_DAYS  = 180
 SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
 EMAIL_FROM           = "eric@cx-assoc.com"
 EMAIL_TO = [
+    "riazul.hoque@cx-assoc.com",
     "eric@cx-assoc.com",
 ]
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
@@ -396,10 +439,20 @@ DASHBOARD_MAX_DISPLAY = 150
 
 REQUEST_HEADERS = {
     "User-Agent": (
-        "CxA-RFP-Monitor/1.0 "
-        "(Cx Associates commissioning firm; contact eric@cx-assoc.com)"
-    )
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
+
 REQUEST_TIMEOUT       = 20
 REQUEST_DELAY_SECONDS = 2
 REQUEST_MAX_RETRIES   = 3
