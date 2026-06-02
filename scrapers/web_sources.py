@@ -316,6 +316,8 @@ def _scrape_by_type(
         return _scrape_aesp_rfps(url, name, state)
     elif ptype == "neep_rfps":
         return _scrape_neep_rfps(url, name, state)
+    elif ptype == "efficiency_maine_rfps":
+        return _scrape_efficiency_maine_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -1406,6 +1408,147 @@ def _scrape_veic_rfps(url: str, name: str, state: str) -> List[Opportunity]:
         ))
 
     logger.info(f"VEIC RFP dedicated parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Efficiency Maine opportunity postings.
+
+    Target page:
+      https://www.efficiencymaine.com/opportunities/
+
+    The generic scraper is too broad for this page because it captures
+    navigation links such as "Getting Started" and "Income-Based Eligibility
+    Verification", and it does not visit individual opportunity pages where
+    due dates/deadlines are typically listed.
+
+    This parser keeps only opportunity-detail links and fetches each detail
+    page to extract fuller description/deadline context.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".entry-content")
+        or soup
+    )
+
+    opportunities = []
+    seen_urls = set()
+
+    include_url_terms = [
+        "/opportunities/rfp-",
+        "/opportunities/rfq-",
+        "/opportunities/rfi-",
+    ]
+
+    include_title_terms = [
+        "request for proposal",
+        "request for proposals",
+        "request for qualifications",
+        "request for quotation",
+        "request for information",
+        "rfp",
+        "rfq",
+        "rfi",
+        "evaluation",
+        "verification",
+        "grid modernization",
+        "support services",
+    ]
+
+    exclude_title_terms = [
+        "getting started",
+        "income-based eligibility verification",
+        "vendor support",
+        "forms and brochures",
+        "home energy loans",
+    ]
+
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True))
+        href = link.get("href", "")
+        absolute_url = urllib.parse.urljoin(url, href)
+
+        if not title or len(title) < 8:
+            continue
+
+        title_l = title.lower()
+        url_l = absolute_url.lower()
+
+        if absolute_url in seen_urls:
+            continue
+
+        if any(term in title_l for term in exclude_title_terms):
+            continue
+
+        # Keep only actual opportunity detail pages.
+        if not any(term in url_l for term in include_url_terms):
+            continue
+
+        # Also require the title to look procurement/evaluation related.
+        if not any(term in title_l for term in include_title_terms):
+            continue
+
+        seen_urls.add(absolute_url)
+
+        detail_html = _fetch_page(absolute_url)
+        detail_text = ""
+        if detail_html:
+            detail_soup = BeautifulSoup(detail_html, "html.parser")
+            detail_links = [
+                (
+                    clean_text(a.get_text(" ", strip=True)),
+                    urllib.parse.urljoin(absolute_url, a.get("href", "")),
+                )
+                for a in detail_soup.find_all("a", href=True)
+            ]
+
+            # If Efficiency Maine has posted a Notice of Award, the RFP/RFQ is
+            # no longer an active opportunity. Exclude it from the dashboard.
+            closed_notice_terms = [
+                "notice of award",
+                "notice of prequalification",
+            ]
+
+            if any(
+                    any(term in link_text.lower() for term in closed_notice_terms)
+                    for link_text, _ in detail_links
+            ):
+                logger.info(f"Efficiency Maine: skipping closed/awarded opportunity: {title}")
+                continue
+            detail_main = (
+                detail_soup.select_one("main")
+                or detail_soup.select_one("#main")
+                or detail_soup.select_one("#content")
+                or detail_soup.select_one(".main-content")
+                or detail_soup.select_one(".entry-content")
+                or detail_soup
+            )
+            detail_text = clean_text(detail_main.get_text(" ", strip=True), max_length=1500)
+
+        description = detail_text or title
+        deadline = _extract_deadline_from_text(description)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=description,
+            issuer="Efficiency Maine",
+            state=state,
+            deadline=deadline,
+        ))
+
+    logger.info(f"Efficiency Maine parser: {len(opportunities)} entries parsed")
     return opportunities
 
 # ---------------------------------------------------------------------------

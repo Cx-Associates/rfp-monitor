@@ -295,9 +295,10 @@ UTILITY_SOURCES = [
         "name": "Efficiency Maine",
         "url": "https://www.efficiencymaine.com/opportunities/",
         "state": "ME",
+        "type": "efficiency_maine_rfps",
         "js_render": False,
         "active": True,
-        "notes": "Updated URL -- may need adjustment if still 404.",
+        "notes": "Efficiency Maine opportunity/RFP page. Uses dedicated parser to extract detail-page deadlines.",
     },
     {
         "name": "Mass Save / EEAC",
