@@ -241,17 +241,23 @@ def main():
     logger.info("=" * 55)
     logger.info(f"SCORING (mode={mode})")
     logger.info("=" * 55)
-    from scorer import filter_and_sort
-    scored = filter_and_sort(raw_opps, mode=mode)
+    from scorer import score_split_and_sort, filter_manual_review_candidates
+    scored, manual_review, all_scored = score_split_and_sort(raw_opps, mode=mode)
+    manual_review = filter_manual_review_candidates(manual_review)
 
     if not scored:
         logger.info(
             f"No opportunities passed the relevance threshold "
-            f"(mode={mode}). Generating empty dashboard."
+            f"(mode={mode}). Generating dashboard with manual-review candidates."
         )
         if not args.dry_run:
             from delivery import generate_dashboard
-            generate_dashboard([], [], mode=mode)
+            generate_dashboard(
+                [],
+                [],
+                mode=mode,
+                manual_review=manual_review,
+            )
         sys.exit(0)
 
     # -------------------------------------------------------------------------
@@ -294,7 +300,12 @@ def main():
     from delivery import send_email_digest, generate_dashboard
 
     email_ok    = send_email_digest(new_opps, mode=mode)
-    dashboard_ok = generate_dashboard(new_opps, scored, mode=mode)
+    dashboard_ok = generate_dashboard(
+        new_opps,
+        scored,
+        mode=mode,
+        manual_review=manual_review,
+    )
 
     logger.info(
         f"Delivery: email={'OK' if email_ok else 'FAILED'} | "

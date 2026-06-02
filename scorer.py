@@ -169,24 +169,18 @@ def _min_score_for_mode(mode: str) -> int:
         else config.MIN_SCORE_INCLUDE_MEDIUM
     )
 
-
-def filter_and_sort(
+def score_split_and_sort(
     opportunities: List[Opportunity],
     mode: Optional[str] = None,
-) -> List[Opportunity]:
+) -> Tuple[List[Opportunity], List[Opportunity], List[Opportunity]]:
     """
-    Score all opportunities, drop those below the mode-appropriate threshold,
-    and return the remainder sorted by score descending (then deadline ascending
-    for ties -- soonest deadline surfaces first when scores are equal).
+    Score all opportunities and split them into:
+      - passing: opportunities at or above the mode threshold
+      - manual_review: below-threshold opportunities for optional human review
+      - all_scored: all scored opportunities
 
-    This is the main entry point called by main.py after all scrapers finish.
-
-    Args:
-        opportunities: Raw, unscored list from all sources combined
-        mode:          "broad" or "medium". Defaults to config.KEYWORD_MODE.
-
-    Returns:
-        Filtered, scored, sorted list of Opportunity objects
+    This supports the dashboard's main table plus a collapsible manual-review
+    section without changing the email digest behavior.
     """
     if mode is None:
         mode = config.KEYWORD_MODE
@@ -198,33 +192,142 @@ def filter_and_sort(
         f"(mode={mode}, threshold={min_score})"
     )
 
-    # Score all opportunities
-    scored = [score_opportunity(opp, mode=mode) for opp in opportunities]
+    all_scored = [score_opportunity(opp, mode=mode) for opp in opportunities]
 
-    # Filter by threshold
-    passing = [opp for opp in scored if opp.relevance_score >= min_score]
+    passing = [opp for opp in all_scored if opp.relevance_score >= min_score]
+    manual_review = [opp for opp in all_scored if opp.relevance_score < min_score]
 
-    # Sort: highest score first; for ties, soonest deadline first
     def sort_key(opp: Opportunity) -> Tuple:
-        deadline_sort = opp.deadline or "9999-12-31"  # No deadline sorts to end
-        return (-opp.relevance_score, deadline_sort)
+        deadline_sort = opp.deadline or "9999-12-31"
+        return (-opp.relevance_score, deadline_sort, opp.source, opp.title)
 
     passing.sort(key=sort_key)
+    manual_review.sort(key=sort_key)
+    all_scored.sort(key=sort_key)
 
-    # Log scoring summary
-    high_count   = sum(1 for o in passing if o.confidence == "High")
+    high_count = sum(1 for o in passing if o.confidence == "High")
     medium_count = sum(1 for o in passing if o.confidence == "Medium")
-    low_count    = sum(1 for o in passing if o.confidence == "Low")
+    low_count = sum(1 for o in passing if o.confidence == "Low")
 
     logger.info(
         f"Scoring complete: {len(passing)}/{len(opportunities)} passed "
-        f"(High={high_count}, Medium={medium_count}, Low={low_count})"
+        f"(High={high_count}, Medium={medium_count}, Low={low_count}); "
+        f"{len(manual_review)} below threshold for manual review"
     )
 
-    for opp in passing[:15]:  # Log top 15 to keep output manageable
+    for opp in passing[:15]:
         logger.info(
             f"  [{opp.confidence:6s}|{opp.relevance_score:3d}pts] "
             f"{opp.source:<25s} {opp.title[:65]}"
         )
 
+    return passing, manual_review, all_scored
+
+def filter_manual_review_candidates(
+    opportunities: List[Opportunity],
+) -> List[Opportunity]:
+    """
+    Keep only below-threshold items that are still plausibly procurement-related.
+
+    This does not affect scoring, the main dashboard, or the email digest.
+    It only prevents obvious navigation/footer/support links from cluttering
+    the manual-review section.
+    """
+    exclude_title_terms = [
+        "skip to content",
+        "back to top",
+        "contact",
+        "search",
+        "menu",
+        "home",
+        "about",
+        "careers",
+        "privacy",
+        "sitemap",
+        "subscribe",
+        "grants.gov",
+        "program information center",
+        "committees and groups",
+        "key study areas",
+        "planning advisory committee",
+        "transmission planning guides",
+        "solar power impact",
+        "our impact",
+        "see all",
+    ]
+
+    include_terms = [
+        "rfp",
+        "rfq",
+        "rfi",
+        "request for proposal",
+        "request for proposals",
+        "request for qualifications",
+        "request for quotation",
+        "request for information",
+        "solicitation",
+        "bid",
+        "procurement",
+        "proposal",
+        "evaluation",
+        "measurement",
+        "verification",
+        "em&v",
+        "m&v",
+        "impact evaluation",
+        "program evaluation",
+    ]
+
+    filtered = []
+    seen = set()
+
+    for opp in opportunities:
+        title_l = (opp.title or "").lower()
+        desc_l = (opp.description or "").lower()
+        url_l = (opp.url or "").lower()
+        combined_l = f"{title_l} {desc_l} {url_l}"
+
+        if not opp.url or opp.url.startswith("mailto:"):
+            continue
+
+        if "/cdn-cgi/l/email-protection" in url_l:
+            continue
+
+        if any(term in title_l for term in exclude_title_terms):
+            continue
+
+        if not any(term in combined_l for term in include_terms):
+            continue
+
+        key = opp.unique_key()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        filtered.append(opp)
+
+    return filtered
+
+def filter_and_sort(
+    opportunities: List[Opportunity],
+    mode: Optional[str] = None,
+) -> List[Opportunity]:
+    """
+    Score, filter, and sort opportunities using the existing scoring logic.
+
+    Backward-compatible wrapper around score_split_and_sort().
+    Returns only opportunities that meet the inclusion threshold, which is the
+    same behavior this function had before.
+
+    The scoring criteria are unchanged:
+      - same keyword lists
+      - same primary/secondary/tertiary weights
+      - same title bonus
+      - same broad/medium thresholds
+      - same confidence labeling from score_opportunity()
+    """
+    passing, _manual_review, _all_scored = score_split_and_sort(
+        opportunities,
+        mode=mode,
+    )
     return passing

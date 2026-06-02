@@ -277,6 +277,7 @@ def generate_dashboard(
     new_opportunities: List[Opportunity],
     all_scored: List[Opportunity],
     mode: str = None,
+    manual_review: Optional[List[Opportunity]] = None,
 ) -> bool:
     """
     Write a static HTML dashboard to config.DASHBOARD_OUTPUT_PATH.
@@ -309,7 +310,12 @@ def generate_dashboard(
 
     try:
         os.makedirs(os.path.dirname(config.DASHBOARD_OUTPUT_PATH), exist_ok=True)
-        html = _render_dashboard_html(new_opportunities, all_scored, mode)
+        html = _render_dashboard_html(
+            new_opportunities,
+            all_scored,
+            mode,
+            manual_review or [],
+        )
         with open(config.DASHBOARD_OUTPUT_PATH, "w", encoding="utf-8") as f:
             f.write(html)
         logger.info(f"Dashboard written to {config.DASHBOARD_OUTPUT_PATH}")
@@ -323,6 +329,7 @@ def _render_dashboard_html(
     new_opps: List[Opportunity],
     all_opps: List[Opportunity],
     mode: str,
+    manual_review: List[Opportunity],
 ) -> str:
     """
     Build the complete HTML string for the GitHub Pages dashboard.
@@ -338,7 +345,7 @@ def _render_dashboard_html(
     new_keys   = {o.unique_key() for o in new_opps}
     mode_label = "Broad" if mode == "broad" else "Medium"
 
-    # Build filter option sets from the data
+    # Build filter option sets from the main/passing table only.
     sources = sorted(set(o.source for o in all_opps))
     states  = sorted(s for s in set(o.state or "" for o in all_opps) if s)
 
@@ -347,9 +354,10 @@ def _render_dashboard_html(
     high_cnt   = sum(1 for o in all_opps if o.confidence == "High")
     medium_cnt = sum(1 for o in all_opps if o.confidence == "Medium")
     total_cnt  = len(all_opps)
+    manual_cnt = len(manual_review)
 
     def table_row(opp: Opportunity) -> str:
-        """Render one <tr> for the opportunities table."""
+        """Render one <tr> for an opportunities table."""
         is_new      = opp.unique_key() in new_keys
         new_badge   = '<span class="badge-new">NEW</span> ' if is_new else ""
         conf_class  = {"High":"conf-high","Medium":"conf-med","Low":"conf-low"}.get(
@@ -384,7 +392,20 @@ def _render_dashboard_html(
             f"</tr>\n"
         )
 
-    table_rows     = "".join(table_row(o) for o in all_opps[:config.DASHBOARD_MAX_DISPLAY])
+    table_rows = "".join(
+        table_row(o) for o in all_opps[:config.DASHBOARD_MAX_DISPLAY]
+    )
+    manual_rows = "".join(
+        table_row(o) for o in manual_review[:config.DASHBOARD_MAX_DISPLAY]
+    )
+
+    if not manual_rows:
+        manual_rows = (
+            '<tr><td colspan="9" style="color:#777;font-style:italic;">'
+            'No below-threshold candidates for manual review.'
+            '</td></tr>'
+        )
+
     source_options = "".join(f'<option value="{_esc(s)}">{_esc(s)}</option>' for s in sources)
     state_options  = "".join(f'<option value="{_esc(s)}">{s}</option>' for s in states)
 
@@ -429,6 +450,12 @@ def _render_dashboard_html(
     .conf-med{{color:#e65100;font-weight:600;}}
     .conf-low{{color:#888;}}
     .days-urgent{{color:#c62828;font-weight:700;}}
+    .manual-review{{margin:0 28px 28px;background:#fff;border-radius:8px;
+                    box-shadow:0 1px 3px rgba(0,0,0,.1);padding:12px 16px;}}
+    .manual-review summary{{cursor:pointer;font-weight:700;color:#1a1a2e;}}
+    .manual-review p{{font-size:12px;color:#777;margin:8px 0 10px 0;}}
+    .manual-table{{padding:8px 0 0;}}
+    .manual-table table{{box-shadow:none;border:1px solid #eee;}}
     a{{color:#0066cc;text-decoration:none;}}
     a:hover{{text-decoration:underline;}}
     #row-count{{font-size:12px;color:#888;padding:0 28px 8px;}}
@@ -451,6 +478,7 @@ def _render_dashboard_html(
     <div class="stat"><div class="n" style="color:#e65100">{medium_cnt}</div>
       <div class="l">Medium confidence</div></div>
     <div class="stat"><div class="n">{total_cnt}</div><div class="l">Total active</div></div>
+    <div class="stat"><div class="n">{manual_cnt}</div><div class="l">Manual review</div></div>
   </div>
 
   <div class="filters">
@@ -490,6 +518,29 @@ def _render_dashboard_html(
       </tbody>
     </table>
   </div>
+
+  <details class="manual-review">
+    <summary>Manual review candidates ({manual_cnt} below threshold)</summary>
+    <p>
+      These items were scraped and scored but did not meet the current inclusion
+      threshold for the main dashboard/email digest. Review periodically for
+      missed opportunities or keyword-tuning ideas.
+    </p>
+    <div class="tbl-wrap manual-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
+            <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
+            <th>Keywords</th>
+          </tr>
+        </thead>
+        <tbody>
+          {manual_rows}
+        </tbody>
+      </table>
+    </div>
+  </details>
 
   <script>
     function applyFilters() {{
