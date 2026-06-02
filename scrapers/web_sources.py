@@ -314,6 +314,8 @@ def _scrape_by_type(
         return _scrape_veic_rfps(url, name, state)
     elif ptype == "aesp_rfps":
         return _scrape_aesp_rfps(url, name, state)
+    elif ptype == "neep_rfps":
+        return _scrape_neep_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -558,6 +560,133 @@ def _scrape_ca_eprocure(url: str, name: str, state: str) -> List[Opportunity]:
     # Fall back to the configured CaleProcure URL
     return _scrape_generic_rfp_page(url, name, state)
 
+def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape NEEP's Requests for Proposals page.
+
+    Target page:
+      https://neep.org/about/requests-proposals
+
+    The generic scraper is too broad for NEEP because it captures informational
+    pages such as "EM&V Products" and "Public Policy and Programs", which score
+    highly but are not active procurement opportunities.
+
+    This parser only returns links/listings that look like actual RFP/RFQ/RFI
+    opportunities. If NEEP has no active postings, it returns zero candidates.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".region-content")
+        or soup
+    )
+
+    page_text = clean_text(main_content.get_text(" ", strip=True)).lower()
+
+    no_active_markers = [
+        "there are no current requests for proposals",
+        "no current requests for proposals",
+        "no active requests for proposals",
+        "no active rfps",
+        "no current rfps",
+        "currently no rfps",
+    ]
+
+    if any(marker in page_text for marker in no_active_markers):
+        logger.info("NEEP RFPs: no active RFPs detected on page")
+        return []
+
+    include_terms = [
+        "rfp",
+        "rfq",
+        "rfi",
+        "request for proposal",
+        "request for proposals",
+        "request for qualification",
+        "request for qualifications",
+        "request for information",
+    ]
+
+    exclude_terms = [
+        "public policy and programs",
+        "em&v products",
+        "emv products",
+        "regional roundup",
+        "legislative and codes tracking",
+        "federal policy resources",
+        "energy efficiency plus beneficial electrification",
+        "home",
+        "about",
+        "contact",
+        "careers",
+        "events",
+        "news",
+        "blog",
+        "resources",
+        "search",
+        "login",
+        "privacy",
+        "terms",
+        "read more",
+        "requests for proposals",  # page title/self-link, not an opportunity
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True))
+        href = link.get("href", "")
+
+        if not title or len(title) < 8:
+            continue
+
+        title_l = title.lower()
+        absolute_url = urllib.parse.urljoin(url, href)
+
+        if absolute_url.rstrip("/") == url.rstrip("/"):
+            continue
+
+        if any(term in title_l for term in exclude_terms):
+            continue
+
+        parent_text = clean_text(
+            link.parent.get_text(" ", strip=True),
+            max_length=800,
+        ) if link.parent else title
+
+        combined_l = f"{title} {parent_text}".lower()
+
+        if not any(term in combined_l for term in include_terms):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        deadline = _extract_deadline_from_text(parent_text)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=parent_text or title,
+            issuer="NEEP",
+            state=state,
+            deadline=deadline,
+        ))
+
+    logger.info(f"NEEP RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 # ---------------------------------------------------------------------------
 # Generic HTML link scraper (used as primary and fallback)
@@ -651,6 +780,80 @@ def _scrape_generic_rfp_page(
         ))
 
     return opps
+
+def _infer_state_from_text(text: str) -> str:
+    """
+    Infer a U.S. state abbreviation from opportunity title/description text.
+
+    This is mainly useful for aggregator sources like AESP, which list RFPs
+    from multiple utilities and state agencies on one page. If no state can be
+    inferred confidently, return an empty string and let the dashboard display
+    "--".
+    """
+    if not text:
+        return ""
+
+    text_l = text.lower()
+
+    state_terms = {
+        "AL": ["alabama"],
+        "AK": ["alaska"],
+        "AZ": ["arizona"],
+        "AR": ["arkansas"],
+        "CA": ["california"],
+        "CO": ["colorado"],
+        "CT": ["connecticut", "ct energy efficiency board"],
+        "DE": ["delaware"],
+        "FL": ["florida"],
+        "GA": ["georgia"],
+        "HI": ["hawaii", "state of hawaii", "hawaii public utilities commission"],
+        "ID": ["idaho"],
+        "IL": ["illinois", "comed", "commonwealth edison"],
+        "IN": ["indiana"],
+        "IA": ["iowa"],
+        "KS": ["kansas"],
+        "KY": ["kentucky"],
+        "LA": ["louisiana"],
+        "ME": ["maine", "efficiency maine"],
+        "MD": ["maryland"],
+        "MA": ["massachusetts"],
+        "MI": ["michigan"],
+        "MN": ["minnesota"],
+        "MS": ["mississippi"],
+        "MO": ["missouri"],
+        "MT": ["montana"],
+        "NE": ["nebraska"],
+        "NV": ["nevada"],
+        "NH": ["new hampshire"],
+        "NJ": ["new jersey"],
+        "NM": ["new mexico"],
+        "NY": ["new york", "national grid ny"],
+        "NC": ["north carolina"],
+        "ND": ["north dakota"],
+        "OH": ["ohio"],
+        "OK": ["oklahoma"],
+        "OR": ["oregon"],
+        "PA": ["pennsylvania"],
+        "RI": ["rhode island"],
+        "SC": ["south carolina"],
+        "SD": ["south dakota"],
+        "TN": ["tennessee"],
+        "TX": ["texas"],
+        "UT": ["utah"],
+        "VT": ["vermont"],
+        "VA": ["virginia"],
+        "WA": ["washington"],
+        "WV": ["west virginia"],
+        "WI": ["wisconsin"],
+        "WY": ["wyoming"],
+        "DC": ["district of columbia", "washington dc", "washington, dc"],
+    }
+
+    for abbrev, terms in state_terms.items():
+        if any(term in text_l for term in terms):
+            return abbrev
+
+    return ""
 
 def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
@@ -781,7 +984,7 @@ def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
             title=clean_text(title, max_length=300),
             description=description,
             issuer="AESP",
-            state=state,
+            state=_infer_state_from_text(f"{title} {description}") or state,
             deadline=deadline,
         ))
 

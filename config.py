@@ -186,9 +186,13 @@ UTILITY_SOURCES = [
     {
         "name": "NEEP (Northeast Energy Efficiency Partnerships)",
         "url": "https://neep.org/about/requests-proposals",
+        "state": "",
+        "type": "neep_rfps",
         "js_render": False,
         "active": True,
-        "notes": "Confirmed URL. Lists RFPs NEEP has issued directly.",
+        "notes": (
+            "NEEP RFP page. Uses a dedicated parser to avoid informational pages."
+        ),
     },
     {
         "name": "ACEEE",
@@ -290,6 +294,7 @@ UTILITY_SOURCES = [
     {
         "name": "Efficiency Maine",
         "url": "https://www.efficiencymaine.com/opportunities/",
+        "state": "ME",
         "js_render": False,
         "active": True,
         "notes": "Updated URL -- may need adjustment if still 404.",
