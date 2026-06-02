@@ -247,6 +247,18 @@ UTILITY_SOURCES = [
         "active": True,
         "notes": "CT utility. JS-rendered. Phase 2.",
     },
+    {
+        "name": "VEIC & Efficiency Vermont",
+        "url": "https://www.veic.org/organization/rfps",
+        "state": "VT",
+        "type": "veic_rfps",
+        "js_render": False,
+        "active": True,
+        "notes": (
+            "VEIC RFP page, including Efficiency Vermont RFPs"
+            "Efficiency Vermont's own RFP page points users to VEIC for current opportunities."
+        ),
+    },
     # --- Mid-Atlantic / broader regional utilities ---
     {
         "name": "PJM Interconnection Solicitations",
@@ -263,15 +275,16 @@ UTILITY_SOURCES = [
         "notes": "NY ISO. Evaluation and market studies.",
     },
     {
-        "name": "VEIC & Efficiency Vermont",
-        "url": "https://www.veic.org/organization/rfps",
-        "state": "VT",
-        "type": "veic_rfps",
+        "name": "AESP Active RFPs",
+        "url": "https://aesp.org/community/news-and-rpfs/",
+        "state": "",
+        "type": "aesp_rfps",
         "js_render": False,
         "active": True,
         "notes": (
-            "VEIC RFP page, including Efficiency Vermont RFPs"
-            "Efficiency Vermont's own RFP page points users to VEIC for current opportunities."
+            "AESP member news and active RFP/RFQ/RFI page. Dedicated parser should "
+            "only capture the Active RFPs, RFQs, and RFIs section and stop before "
+            "Members news."
         ),
     },
     {

@@ -312,6 +312,8 @@ def _scrape_by_type(
         return _scrape_vermont_business_registry(url, name, state)
     elif ptype == "veic_rfps":
         return _scrape_veic_rfps(url, name, state)
+    elif ptype == "aesp_rfps":
+        return _scrape_aesp_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -649,6 +651,142 @@ def _scrape_generic_rfp_page(
         ))
 
     return opps
+
+def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape AESP's Active RFPs, RFQs, and RFIs section.
+
+    Target page:
+      https://aesp.org/community/news-and-rpfs/
+
+    AESP also posts member news on the same page, so this parser only captures
+    entries under the "Active RFPs, RFQs, and RFIs" heading and stops before the
+    "Members news" heading.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#content")
+        or soup.select_one(".entry-content")
+        or soup
+    )
+
+    # Locate the active RFP/RFQ/RFI section.
+    active_heading = None
+    for heading in main_content.find_all(["h1", "h2", "h3", "h4"]):
+        heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
+        if (
+            "active" in heading_text
+            and ("rfp" in heading_text or "rfq" in heading_text or "rfi" in heading_text)
+        ):
+            active_heading = heading
+            break
+
+    if not active_heading:
+        logger.info("AESP RFPs: no Active RFP/RFQ/RFI heading found")
+        return []
+
+    opportunities = []
+    seen_urls = set()
+
+    # AESP entries appear as headings like:
+    #   Due: July 10, 2026 / Request for Proposal: ...
+    # followed by descriptive text and a "View full RFP/RFQ" link.
+    for entry_heading in active_heading.find_all_next(["h1", "h2", "h3", "h4", "h5"]):
+        heading_text = clean_text(entry_heading.get_text(" ", strip=True))
+
+        # Stop when the page moves into the member-news section.
+        if "members news" in heading_text.lower() or "member news" in heading_text.lower():
+            break
+
+        if not heading_text:
+            continue
+
+        heading_l = heading_text.lower()
+        if not any(term in heading_l for term in ["rfp", "rfq", "rfi", "request for proposal", "request for quotation", "request for information"]):
+            continue
+
+        # Collect nearby text until the next heading, so the description includes
+        # the RFP summary and the "View full RFP" link context.
+        description_parts = [heading_text]
+        links = []
+
+        for sibling in entry_heading.find_next_siblings():
+            if sibling.name in ["h1", "h2", "h3", "h4", "h5"]:
+                break
+
+            sibling_text = clean_text(sibling.get_text(" ", strip=True))
+            if sibling_text:
+                description_parts.append(sibling_text)
+
+            for link in sibling.find_all("a", href=True):
+                link_text = clean_text(link.get_text(" ", strip=True))
+                href = link.get("href", "")
+                absolute_url = urllib.parse.urljoin(url, href)
+
+                if not absolute_url.startswith(("http://", "https://")):
+                    continue
+
+                links.append((link_text, absolute_url))
+
+        description = clean_text(" ".join(description_parts), max_length=1000)
+
+        # Prefer "View full RFP/RFQ/RFI" links. Fall back to first usable link.
+        chosen_url = None
+        for link_text, absolute_url in links:
+            link_l = link_text.lower()
+            if "view full" in link_l or "full rfp" in link_l or "full rfq" in link_l or "full rfi" in link_l:
+                chosen_url = absolute_url
+                break
+
+        if not chosen_url and links:
+            chosen_url = links[0][1]
+
+        if not chosen_url:
+            chosen_url = url
+
+        if chosen_url in seen_urls:
+            continue
+        seen_urls.add(chosen_url)
+
+        # Split "Due: date / title" into deadline and title.
+        deadline = _extract_deadline_from_text(heading_text)
+        title = heading_text
+
+        if "/" in heading_text:
+            parts = [p.strip() for p in heading_text.split("/", 1)]
+            if len(parts) == 2:
+                title = parts[1]
+
+        # Extra deadline fallback for headings like "Due: July 10, 2026 / ..."
+        if not deadline:
+            due_match = re.search(
+                r"due:\s*([A-Z][a-z]+ \d{1,2}, \d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+                heading_text,
+                flags=re.IGNORECASE,
+            )
+            if due_match:
+                deadline = normalize_date(due_match.group(1))
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=chosen_url,
+            url=chosen_url,
+            title=clean_text(title, max_length=300),
+            description=description,
+            issuer="AESP",
+            state=state,
+            deadline=deadline,
+        ))
+
+    logger.info(f"AESP RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 # ---------------------------------------------------------------------------
 # Vermont-specific scrapers
