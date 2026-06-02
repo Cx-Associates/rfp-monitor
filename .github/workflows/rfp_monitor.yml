@@ -57,10 +57,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -103,17 +99,39 @@ jobs:
           echo "Executing: $CMD"
           $CMD
 
-      - name: Configure GitHub Pages
+      - name: Upload dashboard preview artifact
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rfp-dashboard-preview
+          path: docs/index.html
+          if-no-files-found: warn
+
+  deploy_pages:
+    name: Deploy dashboard to GitHub Pages
+    needs: monitor
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true') }}
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download dashboard preview artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rfp-dashboard-preview
+          path: docs
+
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
       - name: Upload dashboard artifact
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
 
       - name: Deploy dashboard to GitHub Pages
         id: deployment
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         uses: actions/deploy-pages@v4
