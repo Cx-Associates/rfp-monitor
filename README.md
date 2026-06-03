@@ -57,7 +57,7 @@ Each run:
 | Avangrid / United Illuminating | Phase 2            | Skipped because source is JavaScript-rendered.                                                                                   |
 | Google CSE | Disabled / Phase 2 | Google Custom Search JSON API was blocked/closed for new customers. Google’s replacement option appears to be Vertex AI Search / Agent Builder, but it is not a free service. |
 | EPA ENERGY STAR Solicitations | Disabled           | No confirmed current replacement URL.                                                                                            |
-
+| PJM solicitations | Needs follow-up | Configured URL returned 0 candidates and appears to be broken/not useful as a scrapeable RFP source. |
 ---
 
 ## Repository Structure
@@ -407,7 +407,7 @@ python -c "from scrapers.web_sources import fetch_utility_sources; opps=fetch_ut
 | Google CSE | Disabled because current Google project/API access is blocked. Re-enable only with an eligible API key/project. |
 | Generic scrapers | Can still collect old PDFs or broader informational pages. Manual-review section helps surface these without polluting the main table. |
 | Source drift | Website redesigns may silently reduce candidates to zero. If a normally productive source drops to zero, inspect the HTML and update selectors. |
-
+| PJM solicitations | Configured URL appears broken or no longer exposes a useful solicitation page. Disable or replace once a reliable static PJM RFP/procurement source is identified. |
 ---
 
 ## Deployment Checklist

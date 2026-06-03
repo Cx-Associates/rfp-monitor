@@ -268,8 +268,8 @@ UTILITY_SOURCES = [
         "name": "PJM Interconnection Solicitations",
         "url": "https://www.pjm.com/about-pjm/who-we-are/vendor-information/solicitations",
         "js_render": False,
-        "active": True,
-        "notes": "Mid-Atlantic ISO. Market and load studies.",
+        "active": False,
+        "notes": "Disabled June 2026. Previous configured solicitations URL is broken and PJM's search-results page is JavaScript/browser-rendered rather than a stable scrapeable RFP listing.",
     },
     {
         "name": "NYISO Procurement",
