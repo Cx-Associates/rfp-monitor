@@ -423,6 +423,9 @@ EMAIL_FROM           = "eric@cx-assoc.com"
 EMAIL_TO = [
     "riazul.hoque@cx-assoc.com",
     "eric@cx-assoc.com",
+    "carrie.napolitan@cx-assoc.com",
+    "liza.boyle@cx-assoc.com",
+    "rachael@cx-assoc.com"
 ]
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
