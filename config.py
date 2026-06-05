@@ -99,6 +99,11 @@ KEYWORDS_SECONDARY = [
     "load impact study",
     "load impact evaluation",
     "demand side management",
+    "evaluation and research",
+    "research and evaluation",
+    "planning, evaluation and research",
+    "planning evaluation research",
+    "evaluation research tasks",
 
     # EM&V-adjacent research terms
     "energy savings study",
@@ -316,6 +321,16 @@ UTILITY_SOURCES = [
         "notes": (
             "VEIC RFP page, including Efficiency Vermont RFPs"
             "Efficiency Vermont's own RFP page points users to VEIC for current opportunities."
+        ),
+    },
+    {
+        "name": "Energy Trust of Oregon Contracting Opportunities",
+        "state": "OR",
+        "url": "https://www.energytrust.org/about/work-with-us/how-to-work-with-energy-trust/contracting-opportunities/",
+        "type": "energy_trust_rfps",
+        "notes": (
+            "Energy Trust of Oregon contracting opportunities page. "
+            "Uses a dedicated parser for module-rfps__rfp opportunity blocks."
         ),
     },
     # --- Mid-Atlantic / broader regional utilities ---

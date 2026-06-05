@@ -322,6 +322,8 @@ def _scrape_by_type(
         return _scrape_nh_energy_rfps(url, name, state)
     elif ptype == "ct_eeb_rfps":
         return _scrape_ct_eeb_rfps(url, name, state)
+    elif ptype == "energy_trust_rfps":
+        return _scrape_energy_trust_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -913,6 +915,104 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
         ))
 
     logger.info(f"NH DOE RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Energy Trust of Oregon contracting opportunities.
+
+    Target page:
+      https://www.energytrust.org/about/work-with-us/how-to-work-with-energy-trust/contracting-opportunities/
+
+    Confirmed page structure:
+      <div class="module-rfps__rfp">
+        <h2 class="module-rfps__rfp__title">RFQ—...</h2>
+        <h3 class="module-rfps__rfp__date">Posted on ...</h3>
+        <div class="module-rfps__rfp__description">...</div>
+        <div class="module-rfps__rfp__pdf"><a href="...">Download RFQ</a></div>
+      </div>
+
+    This parser avoids global navigation/menu links and creates one opportunity
+    per visible RFQ/RFP card.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    cards = soup.select(".module-rfps__rfp")
+    if not cards:
+        logger.info("Energy Trust RFPs: no opportunity cards found")
+        return []
+
+    opportunities = []
+    seen_urls = set()
+
+    for card in cards:
+        title_el = card.select_one(".module-rfps__rfp__title")
+        date_el = card.select_one(".module-rfps__rfp__date")
+        desc_el = card.select_one(".module-rfps__rfp__description")
+        link_el = card.select_one(".module-rfps__rfp__pdf a[href]") or card.find("a", href=True)
+
+        title = clean_text(title_el.get_text(" ", strip=True), max_length=500) if title_el else ""
+        posted_text = clean_text(date_el.get_text(" ", strip=True)) if date_el else ""
+        description = clean_text(desc_el.get_text(" ", strip=True), max_length=1000) if desc_el else ""
+
+        if not title:
+            continue
+
+        if not link_el:
+            logger.debug(f"Energy Trust RFPs: no RFQ/RFP link found for {title}")
+            continue
+
+        href = link_el.get("href", "")
+        absolute_url = urllib.parse.urljoin(url, href)
+
+        if not absolute_url.startswith(("http://", "https://")):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        posted_date = None
+        if posted_text.lower().startswith("posted on"):
+            posted_date = normalize_date(posted_text.replace("Posted on", "", 1).strip())
+        else:
+            posted_date = normalize_date(posted_text)
+
+        # Capture deadline/close date from common page text patterns.
+        # Example confirmed on page:
+        #   "Consultants will be accepted into the pool on an ongoing basis through December 31, 2026."
+        deadline = _extract_deadline_from_text(description)
+
+        if not deadline:
+            through_match = re.search(
+                r"\bthrough\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})",
+                description,
+                flags=re.IGNORECASE,
+            )
+            if through_match:
+                deadline = normalize_date(through_match.group(1))
+
+        notice_id = title
+        if posted_date:
+            notice_id = f"{title}::{posted_date}"
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=notice_id,
+            url=absolute_url,
+            title=title,
+            description=description or title,
+            issuer="Energy Trust of Oregon",
+            state=state,
+            posted_date=posted_date,
+            deadline=deadline,
+        ))
+
+    logger.info(f"Energy Trust RFP parser: {len(opportunities)} entries parsed")
     return opportunities
 
 # ---------------------------------------------------------------------------
