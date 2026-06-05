@@ -52,16 +52,25 @@ KEYWORD_MODE = "broad"   # Options: "broad" | "medium"
 KEYWORDS_PRIMARY = [
     # EM&V core terminology
     "evaluation, measurement and verification",
+    "evaluation, measurement, and verification",
     "evaluation measurement and verification",
+    "evaluation measurement verification",
     "EM&V",
+    "EMV",
     "M&V",
+    "MV",
     "IPMVP",
     "measurement and verification",
+    "measurement & verification",
+    "savings verification",
     "energy savings verification",
     "energy efficiency evaluation",
+
     # Common RFP title patterns for evaluation work
     "EM&V services",
+    "EMV services",
     "M&V services",
+    "MV services",
     "evaluation services energy",
 ]
 
@@ -73,8 +82,12 @@ KEYWORDS_SECONDARY = [
     "process evaluation",
     "market effects study",
     "net-to-gross",
+    "net to gross",
     "free ridership",
+    "free-ridership",
+    "spillover",
     "baseline study",
+    "baseline research",
     "deemed savings",
     "custom measure evaluation",
     "portfolio evaluation",
@@ -82,17 +95,38 @@ KEYWORDS_SECONDARY = [
     "utility program evaluation",
     "DSM evaluation",
     "demand-side management evaluation",
+    "demand side management evaluation",
     "load impact study",
+    "load impact evaluation",
     "non-energy impacts",
+    "non energy impacts",
+    "demand side management",
+
     # EM&V-adjacent research terms
     "energy savings study",
     "energy audit verification",
+    "technical engineering support",
+    "technical review",
+    "engineering review",
+    "project review",
+    "custom project review",
+    "custom savings review",
+    "savings analysis",
+    "ex post evaluation",
+    "ex ante review",
+    "realization rate",
+    "gross savings",
+    "verified savings",
+    "claimed savings",
+    "reported savings",
 ]
 
 KEYWORDS_TERTIARY = [
     # Broader energy efficiency terms -- active in "broad" mode only
     "energy efficiency",
+    # "energy",  # intentionally not included; too broad/noisy
     "demand response evaluation",
+    "demand response",
     "load research",
     "load forecasting study",
     "building energy study",
@@ -105,9 +139,30 @@ KEYWORDS_TERTIARY = [
     "energy technical assistance",
     "commissioning evaluation",        # CxA-specific: Cx overlap with EM&V
     "retrocommissioning evaluation",
+    "retro-commissioning evaluation",
     "building performance",
     "decarbonization study",
     "greenhouse gas evaluation",
+    "greenhouse gas accounting",
+    "technical support services",
+    "energy audit",
+    "energy audits",
+    "commercial energy audit",
+    "energy assessment",
+    "energy assessments",
+    "energy engineering services",
+    "energy program support",
+    "program implementation support",
+    "quality assurance",
+    "quality control",
+    "QA/QC",
+    "TRM review",
+    "technical reference manual",
+    "deemed measure",
+    "custom measures",
+    "benefit cost analysis",
+    "cost effectiveness",
+    "cost-effectiveness",
 ]
 
 # ---------------------------------------------------------------------------

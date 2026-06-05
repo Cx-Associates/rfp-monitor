@@ -275,11 +275,15 @@ Scoring tiers:
 
 | Tier | Example Focus | Points |
 |---|---|---|
-| Primary | EM&V, M&V, IPMVP, savings verification | Highest |
-| Secondary | Program evaluation, impact evaluation, NTG, deemed savings | Medium |
-| Tertiary | Broader energy efficiency / building performance terms | Lowest; broad mode only |
+| Primary | Core EM&V/M&V terminology, IPMVP, measurement and verification, savings verification, and EM&V/M&V services | Highest |
+| Secondary | Program evaluation, impact evaluation, process evaluation, NTG, free ridership/spillover, deemed savings, custom measure evaluation, load impact, realization rate, claimed/reported/verified savings, and technical/project review terms | Medium |
+| Tertiary | Broader adjacent energy-efficiency, demand response, load research, benchmarking, commissioning/retrocommissioning, decarbonization, greenhouse-gas, audit, QA/QC, TRM, and cost-effectiveness terms | Lowest; broad mode only |
 
 Title matches receive an additional title bonus because titles are often the strongest available signal.
+
+The keyword lists intentionally include common EM&V spelling and punctuation permutations, including `EM&V`, `EMV`, `M&V`, `MV`, `measurement and verification`, `measurement & verification`, `evaluation, measurement and verification`, `evaluation, measurement, and verification`, and `evaluation measurement verification`.
+
+The standalone keyword `energy` should remain commented out or excluded. It is too broad for the current scoring threshold because a single tertiary match can qualify an opportunity in broad mode, which would create substantial non-procurement and non-EM&V noise.
 
 ### Manual Review Candidates
 
