@@ -320,6 +320,8 @@ def _scrape_by_type(
         return _scrape_efficiency_maine_rfps(url, name, state)
     elif ptype == "nh_energy_rfps":
         return _scrape_nh_energy_rfps(url, name, state)
+    elif ptype == "ct_eeb_rfps":
+        return _scrape_ct_eeb_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -1079,6 +1081,124 @@ def _infer_state_from_text(text: str) -> str:
             return abbrev
 
     return ""
+
+def _scrape_ct_eeb_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the Connecticut Energy Efficiency Board RFP/RFQ page.
+
+    Target page:
+      https://www.energizect.com/connecticut-energy-efficiency-board/rfps
+
+    The page redirects to:
+      https://www.energizect.com/eeb-request-proposals
+
+    Current confirmed structure:
+      - "Open RFPs/RFQs:" heading
+      - "There are currently no open RFPs/RFQs." when empty
+      - "Supporting Documents:" heading after the open section
+
+    The parser only reads the Open RFPs/RFQs section and intentionally stops
+    before Supporting Documents so travel guidelines, terms and conditions,
+    NDAs, and similar supporting files are not treated as opportunities.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".region-content")
+        or soup
+    )
+
+    page_text_l = clean_text(main_content.get_text(" ", strip=True)).lower()
+
+    if "there are currently no open rfps/rfqs" in page_text_l:
+        logger.info("CT EEB RFPs: page reports no open RFPs/RFQs")
+        return []
+
+    open_heading = None
+    for heading in main_content.find_all(["h3", "h4", "h5", "h6"]):
+        heading_text_l = clean_text(heading.get_text(" ", strip=True)).lower()
+        if "open rfps/rfqs" in heading_text_l or "open rfps" in heading_text_l:
+            open_heading = heading
+            break
+
+    if not open_heading:
+        logger.info("CT EEB RFPs: no Open RFPs/RFQs heading found")
+        return []
+
+    opportunities = []
+    seen_urls = set()
+
+    # Walk forward from the Open RFPs/RFQs heading until the next heading.
+    # Stop before Supporting Documents or any later page section.
+    for sibling in open_heading.find_next_siblings():
+        if sibling.name in ["h2", "h3", "h4", "h5", "h6"]:
+            sibling_text_l = clean_text(sibling.get_text(" ", strip=True)).lower()
+            if (
+                "supporting documents" in sibling_text_l
+                or "submit a new technology" in sibling_text_l
+                or "apply to become" in sibling_text_l
+            ):
+                break
+
+        sibling_text_l = clean_text(sibling.get_text(" ", strip=True)).lower()
+        if "there are currently no open rfps/rfqs" in sibling_text_l:
+            logger.info("CT EEB RFPs: page reports no open RFPs/RFQs")
+            return []
+
+        for link in sibling.find_all("a", href=True):
+            link_text = clean_text(link.get_text(" ", strip=True), max_length=500)
+            href = link.get("href", "")
+
+            if not link_text or not href:
+                continue
+
+            link_text_l = link_text.lower()
+            href_l = href.lower()
+
+            # Avoid accidental capture of support docs if page structure changes.
+            skip_terms = [
+                "travel guidelines",
+                "terms and conditions",
+                "nda",
+                "non-disclosure",
+                "organizational conflict",
+                "supporting document",
+            ]
+            if any(term in link_text_l for term in skip_terms):
+                continue
+            if any(term.replace(" ", "-") in href_l for term in skip_terms):
+                continue
+
+            absolute_url = urllib.parse.urljoin(url, href)
+            if not absolute_url.startswith(("http://", "https://")):
+                continue
+
+            if absolute_url in seen_urls:
+                continue
+            seen_urls.add(absolute_url)
+
+            opportunities.append(Opportunity(
+                source=name,
+                notice_id=absolute_url,
+                url=absolute_url,
+                title=link_text,
+                description=link_text,
+                issuer="Connecticut Energy Efficiency Board",
+                state=state,
+                deadline=None,
+                posted_date=None,
+            ))
+
+    logger.info(f"CT EEB RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """

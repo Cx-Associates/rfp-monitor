@@ -460,6 +460,17 @@ DIRECT_SCRAPE_STATES = [
             "documents such as Q&A, proposals received, and rankings."
         ),
     },
+    {
+        "name": "Connecticut Energy Efficiency Board RFPs",
+        "state": "CT",
+        "url": "https://www.energizect.com/connecticut-energy-efficiency-board/rfps",
+        "type": "ct_eeb_rfps",
+        "notes": (
+            "Connecticut Energy Efficiency Board RFP/RFQ page. "
+            "Uses a dedicated parser to read only the Open RFPs/RFQs section "
+            "and avoid supporting documents."
+        ),
+    },
 ]
 
 GOOGLE_CSE_QUERIES = [
