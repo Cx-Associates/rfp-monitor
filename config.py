@@ -449,6 +449,17 @@ DIRECT_SCRAPE_STATES = [
         "type": "vermont_business_registry",
         "notes":  "Broader Vermont statewide bid search fallback."
     },
+    {
+        "name": "NH Department of Energy RFPs",
+        "state": "NH",
+        "url": "https://www.energy.nh.gov/rules-and-regulatory/requests-proposals",
+        "type": "nh_energy_rfps",
+        "notes": (
+            "NH Department of Energy/Public Utilities Commission RFP page. "
+            "Uses a dedicated parser because each RFP heading includes support "
+            "documents such as Q&A, proposals received, and rankings."
+        ),
+    },
 ]
 
 GOOGLE_CSE_QUERIES = [

@@ -318,6 +318,8 @@ def _scrape_by_type(
         return _scrape_neep_rfps(url, name, state)
     elif ptype == "efficiency_maine_rfps":
         return _scrape_efficiency_maine_rfps(url, name, state)
+    elif ptype == "nh_energy_rfps":
+        return _scrape_nh_energy_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -688,6 +690,227 @@ def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
         ))
 
     logger.info(f"NEEP RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+def _fetch_nh_energy_page(url: str) -> Optional[str]:
+    """
+    Fetch the NH Department of Energy RFP page.
+
+    The NH DOE site is protected by Akamai/EdgeSuite and returns 403 with the
+    default lightweight requests headers. A fuller browser-like header set was
+    confirmed to return the static HTML page with RFP headings and PDF links.
+    """
+    headers = dict(config.REQUEST_HEADERS)
+    headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) "
+            "Gecko/20100101 Firefox/151.0"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    })
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=config.REQUEST_TIMEOUT,
+            verify=True,
+            allow_redirects=True,
+        )
+
+        if response.status_code == 403:
+            logger.warning(
+                f"NH DOE RFPs: 403 Forbidden for {url}. "
+                f"The site may have changed bot-detection behavior."
+            )
+            return None
+
+        if response.status_code == 404:
+            logger.warning(f"NH DOE RFPs: 404 Not Found: {url}")
+            return None
+
+        if response.status_code == 429:
+            logger.warning(f"NH DOE RFPs: 429 Rate Limited: {url}")
+            return None
+
+        response.raise_for_status()
+        return response.text
+
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"NH DOE RFPs: request failed for {url}: {e}")
+        return None
+
+
+def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the NH Department of Energy / Public Utilities Commission RFP page.
+
+    Target page:
+      https://www.energy.nh.gov/rules-and-regulatory/requests-proposals
+
+    Page structure confirmed locally:
+      <section>
+        <h4>RFP 2026-002 Cost of Service and Rate Design Consultant - Electric</h4>
+        <ul>
+          <li><a>Main RFP PDF</a></li>
+          <li><a>Questions and Answers</a></li>
+          <li><a>Proposals Received</a></li>
+          <li><a>Proposals Received and Rankings</a></li>
+        </ul>
+        <h4>Next RFP...</h4>
+        <ul>...</ul>
+      </section>
+
+    The parser creates one Opportunity per h4/ul RFP block and intentionally
+    skips support documents such as Q&A, addenda, proposals received, rankings,
+    business requirements, applications, attachments, and cancellation notices.
+    """
+    html = _fetch_nh_energy_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".region-content")
+        or soup
+    )
+
+    exclude_link_terms = [
+        "question",
+        "questions",
+        "answers",
+        "q&a",
+        "q and a",
+        "addendum",
+        "attachment",
+        "application",
+        "business requirements",
+        "proposals received",
+        "proposal received",
+        "rankings",
+        "notice of cancellation",
+        "notice cancellation",
+        "cancellation",
+        "withdrawal",
+        "contract template",
+        "davis-bacon",
+        "assurance letter",
+        "updated questions",
+    ]
+
+    opportunities = []
+    seen_notice_ids = set()
+
+    for heading in main_content.find_all("h4"):
+        heading_text = clean_text(heading.get_text(" ", strip=True), max_length=500)
+        if not heading_text:
+            continue
+
+        # Keep only RFP headings, e.g. "RFP 2026-002 ..." or "RFP DoIT 2025-042 ..."
+        if not heading_text.lower().startswith("rfp"):
+            continue
+
+        # Pull a stable notice ID from the heading.
+        # Examples:
+        #   RFP 2026-002 ...
+        #   RFP DoIT 2025-042 ...
+        notice_match = re.search(
+            r"\bRFP\s+(?:DoIT\s+)?\d{4}-\d{3}\b",
+            heading_text,
+            flags=re.IGNORECASE,
+        )
+        notice_id = (
+            notice_match.group(0).upper().replace("  ", " ")
+            if notice_match
+            else heading_text[:80]
+        )
+
+        if notice_id in seen_notice_ids:
+            continue
+
+        next_ul = heading.find_next_sibling("ul")
+        if not next_ul:
+            logger.debug(f"NH DOE RFPs: heading has no following list: {heading_text}")
+            continue
+
+        # If the listing already has proposals received/rankings posted, it is
+        # almost certainly closed. Skip it to avoid cluttering the dashboard with
+        # historical NH DOE procurements.
+        block_text_l = clean_text(next_ul.get_text(" ", strip=True)).lower()
+        closed_block_terms = [
+            "proposals received",
+            "proposal received",
+            "rankings",
+            "notice of cancellation",
+            "notice cancellation",
+            "cancellation",
+            "withdrawal",
+        ]
+
+        if any(term in block_text_l for term in closed_block_terms):
+            logger.debug(f"NH DOE RFPs: skipping likely closed listing: {heading_text}")
+            continue
+
+        chosen_link = None
+
+        for link in next_ul.find_all("a", href=True):
+            link_text = clean_text(link.get_text(" ", strip=True), max_length=500)
+            href = link.get("href", "")
+
+            if not link_text or not href:
+                continue
+
+            link_text_l = link_text.lower()
+            href_l = href.lower()
+
+            if any(term in link_text_l for term in exclude_link_terms):
+                continue
+
+            if any(term.replace(" ", "-") in href_l for term in exclude_link_terms):
+                continue
+
+            absolute_url = urllib.parse.urljoin(url, href)
+            if not absolute_url.startswith(("http://", "https://")):
+                continue
+
+            chosen_link = (link_text, absolute_url)
+            break
+
+        if not chosen_link:
+            logger.debug(f"NH DOE RFPs: no main RFP link found for {heading_text}")
+            continue
+
+        link_text, absolute_url = chosen_link
+        seen_notice_ids.add(notice_id)
+
+        # Page does not expose deadline/posted date in the listing. The PDFs may
+        # contain deadlines, but this scraper does not parse PDFs.
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=notice_id,
+            url=absolute_url,
+            title=heading_text,
+            description=heading_text,
+            issuer="New Hampshire Department of Energy / Public Utilities Commission",
+            state=state,
+            deadline=None,
+            posted_date=None,
+        ))
+
+    logger.info(f"NH DOE RFP parser: {len(opportunities)} entries parsed")
     return opportunities
 
 # ---------------------------------------------------------------------------
