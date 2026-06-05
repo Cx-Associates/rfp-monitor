@@ -98,8 +98,6 @@ KEYWORDS_SECONDARY = [
     "demand side management evaluation",
     "load impact study",
     "load impact evaluation",
-    "non-energy impacts",
-    "non energy impacts",
     "demand side management",
 
     # EM&V-adjacent research terms
@@ -163,6 +161,8 @@ KEYWORDS_TERTIARY = [
     "benefit cost analysis",
     "cost effectiveness",
     "cost-effectiveness",
+    "non-energy impacts",
+    "non energy impacts",
 ]
 
 # ---------------------------------------------------------------------------
