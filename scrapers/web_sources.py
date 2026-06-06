@@ -324,6 +324,8 @@ def _scrape_by_type(
         return _scrape_ct_eeb_rfps(url, name, state)
     elif ptype == "energy_trust_rfps":
         return _scrape_energy_trust_rfps(url, name, state)
+    elif ptype == "cape_light_rfps":
+        return _scrape_cape_light_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -1013,6 +1015,173 @@ def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportuni
         ))
 
     logger.info(f"Energy Trust RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+def _fetch_cape_light_page(url: str) -> Optional[str]:
+    """
+    Fetch Cape Light Compact's RFP page.
+
+    The site is usually accessible with normal requests headers, but during
+    testing it intermittently returned SSL EOF handshake errors. Use a
+    short retry loop and Connection: close to reduce connection reuse issues.
+    """
+    headers = dict(config.REQUEST_HEADERS)
+    headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) "
+            "Gecko/20100101 Firefox/151.0"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "close",
+    })
+
+    last_error = None
+
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=config.REQUEST_TIMEOUT,
+                verify=True,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            return response.text
+
+        except requests.exceptions.SSLError as e:
+            last_error = e
+            logger.warning(
+                f"Cape Light RFPs: SSL error on attempt {attempt}/3 for {url}: {e}"
+            )
+            time.sleep(1)
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Cape Light RFPs: request failed for {url}: {e}")
+            return None
+
+    logger.warning(f"Cape Light RFPs: failed after retries due to SSL error: {last_error}")
+    return None
+
+
+def _scrape_cape_light_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Cape Light Compact's RFP/RFI page.
+
+    Target page:
+      https://www.capelightcompact.org/news-and-resources/request-for-proposals-rfp/
+
+    Confirmed page structure:
+      - current/open listings appear before an "Archive" heading
+      - historical listings appear after "Archive"
+      - the page includes support documents such as responses to questions,
+        Q&A, addenda, confidentiality agreements, attachments, and Zoom links
+
+    This parser only reads links before the Archive heading and skips support
+    documents, creating one Opportunity per current RFP/RFI link.
+    """
+    html = _fetch_cape_light_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.find("main")
+        or soup.select_one("#content")
+        or soup.select_one(".site-main")
+        or soup.select_one(".entry-content")
+        or soup
+    )
+
+    archive_heading = None
+    for heading in main_content.find_all(["h2", "h3", "h4", "h5"]):
+        heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
+        if heading_text == "archive":
+            archive_heading = heading
+            break
+
+    skip_terms = [
+        "responses to questions",
+        "response to questions",
+        "questions received",
+        "questions and answers",
+        "q&a",
+        "q & a",
+        "addendum",
+        "addenda",
+        "confidentiality agreement",
+        "non-disclosure",
+        "nda",
+        "mutual nda",
+        "informational conference",
+        "conference call",
+        "zoom",
+        "click here",
+        "attachment",
+        "scope of work",
+        "form of contract",
+        "pricing sheet",
+        "cost bid sheet",
+        "legal ad",
+        "redline",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    # Walk the main-content descendants in document order and stop at Archive.
+    for element in main_content.descendants:
+        if archive_heading is not None and element is archive_heading:
+            break
+
+        if getattr(element, "name", None) != "a":
+            continue
+
+        href = element.get("href", "")
+        link_text = clean_text(element.get_text(" ", strip=True), max_length=500)
+
+        if not href or not link_text:
+            continue
+
+        link_text_l = link_text.lower()
+        href_l = href.lower()
+
+        if any(term in link_text_l for term in skip_terms):
+            continue
+
+        if any(term.replace(" ", "-") in href_l for term in skip_terms):
+            continue
+
+        # Avoid site navigation links and keep only likely RFP/RFI/RFQ links.
+        if not any(term in link_text_l for term in ["rfp", "rfi", "rfq", "proposal", "quotations", "quotes"]):
+            continue
+
+        absolute_url = urllib.parse.urljoin(url, href)
+        if not absolute_url.startswith(("http://", "https://")):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        # The visible date is in text immediately before the link, but the
+        # link text itself is cleaner and stable. Use the file URL or link title
+        # as notice_id because Cape Light does not expose formal notice IDs.
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=link_text,
+            description=link_text,
+            issuer="Cape Light Compact",
+            state=state,
+            posted_date=None,
+            deadline=None,
+        ))
+
+    logger.info(f"Cape Light RFP parser: {len(opportunities)} entries parsed")
     return opportunities
 
 # ---------------------------------------------------------------------------

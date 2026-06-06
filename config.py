@@ -377,6 +377,16 @@ UTILITY_SOURCES = [
         "active": True,
         "notes": "Updated URL -- MA energy efficiency program administrator.",
     },
+    {
+        "name": "Cape Light Compact RFPs",
+        "state": "MA",
+        "url": "https://www.capelightcompact.org/news-and-resources/request-for-proposals-rfp/",
+        "type": "cape_light_rfps",
+        "notes": (
+            "Cape Light Compact RFP/RFI page. Uses a dedicated parser that reads "
+            "current listings before the Archive section and skips Q&A/addenda/support documents."
+        ),
+    },
     # --- National / DOE ecosystem ---
     {
         "name": "DOE EERE Funding Opportunities",
