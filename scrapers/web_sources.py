@@ -35,6 +35,7 @@ import time
 import urllib.parse
 from typing import List, Optional
 import re
+import json
 
 import requests
 from bs4 import BeautifulSoup
@@ -326,6 +327,8 @@ def _scrape_by_type(
         return _scrape_energy_trust_rfps(url, name, state)
     elif ptype == "cape_light_rfps":
         return _scrape_cape_light_rfps(url, name, state)
+    elif ptype == "pge_ee_solicitations":
+        return _scrape_pge_ee_solicitations(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -1183,6 +1186,118 @@ def _scrape_cape_light_rfps(url: str, name: str, state: str) -> List[Opportunity
 
     logger.info(f"Cape Light RFP parser: {len(opportunities)} entries parsed")
     return opportunities
+
+def _scrape_pge_ee_solicitations(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape PG&E's Energy Efficiency third-party solicitations page.
+
+    Target page:
+      https://www.pge.com/en/about/doing-business-with-pge/solicitations.html
+
+    Confirmed structure:
+      - active/upcoming solicitations are embedded in an AEM table component
+      - the table is stored as JSON in .table-data[data-table]
+      - tableTitle = "Active and upcoming solicitations"
+      - columns include Program and Description
+
+    Creates one Opportunity per row in the active/upcoming solicitations table.
+    Uses an embedded PowerAdvocate link when available; otherwise uses the PG&E
+    solicitations page URL.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    opportunities = []
+    seen_ids = set()
+
+    for table_el in soup.select(".table-data[data-table]"):
+        raw_table = table_el.get("data-table", "")
+
+        if not raw_table:
+            continue
+
+        try:
+            table_data = json.loads(raw_table)
+        except json.JSONDecodeError as e:
+            logger.warning(f"PG&E EE solicitations: failed to parse data-table JSON: {e}")
+            continue
+
+        table_title = clean_text(table_data.get("tableTitle", ""))
+        if table_title.lower() != "active and upcoming solicitations":
+            continue
+
+        columns = table_data.get("columnDetails", [])
+        if not columns:
+            continue
+
+        row_count = max(
+            len(col.get("rowDetails", []))
+            for col in columns
+            if isinstance(col.get("rowDetails", []), list)
+        )
+
+        for row_index in range(row_count):
+            row_values = {}
+            row_links = []
+
+            for col in columns:
+                column_name = clean_text(col.get("columnName", ""))
+                row_details = col.get("rowDetails", [])
+
+                if row_index >= len(row_details):
+                    continue
+
+                raw_value = row_details[row_index].get("rowValue", "")
+                value_soup = BeautifulSoup(raw_value, "html.parser")
+                value_text = clean_text(value_soup.get_text(" ", strip=True), max_length=2000)
+
+                row_values[column_name.lower()] = value_text
+
+                for link in value_soup.find_all("a", href=True):
+                    link_text = clean_text(link.get_text(" ", strip=True), max_length=500)
+                    href = link.get("href", "")
+                    absolute_url = urllib.parse.urljoin(url, href)
+
+                    if absolute_url.startswith(("http://", "https://")):
+                        row_links.append((link_text, absolute_url))
+
+            program = row_values.get("program", "")
+            description = row_values.get("description", "")
+
+            if not program:
+                continue
+
+            # Prefer the PowerAdvocate event link when the row exposes one.
+            opportunity_url = url
+            for link_text, link_url in row_links:
+                if "poweradvocate.com" in link_url.lower():
+                    opportunity_url = link_url
+                    break
+
+            notice_id = f"{program}::{opportunity_url}"
+
+            if notice_id in seen_ids:
+                continue
+            seen_ids.add(notice_id)
+
+            opportunities.append(Opportunity(
+                source=name,
+                notice_id=notice_id,
+                url=opportunity_url,
+                title=program,
+                description=description or program,
+                issuer="Pacific Gas and Electric Company",
+                state=state,
+                posted_date=None,
+                deadline=None,
+            ))
+
+    logger.info(f"PG&E EE solicitations parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 # ---------------------------------------------------------------------------
 # Generic HTML link scraper (used as primary and fallback)

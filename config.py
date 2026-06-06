@@ -333,6 +333,17 @@ UTILITY_SOURCES = [
             "Uses a dedicated parser for module-rfps__rfp opportunity blocks."
         ),
     },
+    {
+        "name": "PG&E Energy Efficiency Solicitations",
+        "state": "CA",
+        "url": "https://www.pge.com/en/about/doing-business-with-pge/solicitations.html",
+        "type": "pge_ee_solicitations",
+        "notes": (
+            "PG&E energy efficiency third-party solicitations page. "
+            "Uses a dedicated parser for the AEM data-table titled "
+            "'Active and upcoming solicitations'."
+        ),
+    },
     # --- Mid-Atlantic / broader regional utilities ---
     {
         "name": "PJM Interconnection Solicitations",
