@@ -15,3 +15,4 @@ jobs:
           date -u
           echo "event_name=${{ github.event_name }}"
           echo "ref=${{ github.ref }}"
+# schedule refresh 2026-06-08T10:39:22
