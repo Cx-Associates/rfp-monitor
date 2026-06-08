@@ -398,6 +398,17 @@ UTILITY_SOURCES = [
             "current listings before the Archive section and skips Q&A/addenda/support documents."
         ),
     },
+    {
+        "name": "Entergy RFPs",
+        "state": "Multi",
+        "url": "https://rfp.entergy.com/",
+        "type": "entergy_rfps",
+        "notes": (
+            "Entergy System Planning and Operations RFP page. "
+            "Uses a dedicated parser for the static RFP link list and keeps only "
+            "current/recent RFPs to avoid historical procurement clutter."
+        ),
+    },
     # --- National / DOE ecosystem ---
     {
         "name": "DOE EERE Funding Opportunities",

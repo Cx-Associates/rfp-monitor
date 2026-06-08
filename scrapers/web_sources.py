@@ -39,6 +39,7 @@ import json
 
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 import config
 from models import Opportunity, clean_text, normalize_date
@@ -329,6 +330,8 @@ def _scrape_by_type(
         return _scrape_cape_light_rfps(url, name, state)
     elif ptype == "pge_ee_solicitations":
         return _scrape_pge_ee_solicitations(url, name, state)
+    elif ptype == "entergy_rfps":
+        return _scrape_entergy_rfps(url, name, state)
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
@@ -1298,6 +1301,88 @@ def _scrape_pge_ee_solicitations(url: str, name: str, state: str) -> List[Opport
     logger.info(f"PG&E EE solicitations parser: {len(opportunities)} entries parsed")
     return opportunities
 
+def _scrape_entergy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Entergy System Planning and Operations RFP links.
+
+    Target page:
+      https://rfp.entergy.com/
+
+    Confirmed structure:
+      - static HTML page
+      - left-side RFP menu is normal <a href> links
+      - page includes many historical RFPs back to 2014
+
+    This parser keeps only current/recent RFPs based on the year in the title.
+    It intentionally does not recurse into every RFP subpage because the source
+    is mostly generation/resource procurement and can become noisy.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    current_year = datetime.utcnow().year
+    min_year = current_year - 1
+
+    skip_terms = [
+        "archived documents",
+        "co-owner website",
+        "entergy.com",
+        "privacy policy",
+        "terms of use",
+        "esl request for proposal",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in soup.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True), max_length=500)
+        href = link.get("href", "")
+
+        if not title or not href:
+            continue
+
+        title_l = title.lower()
+
+        if any(term in title_l for term in skip_terms):
+            continue
+
+        if "rfp" not in title_l:
+            continue
+
+        year_match = re.search(r"\b(20\d{2})\b", title)
+        if not year_match:
+            continue
+
+        year = int(year_match.group(1))
+        if year < min_year:
+            continue
+
+        absolute_url = urllib.parse.urljoin(url, href)
+        if not absolute_url.startswith(("http://", "https://")):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=f"{title}::{absolute_url}",
+            url=absolute_url,
+            title=title,
+            description=title,
+            issuer="Entergy",
+            state=state,
+            posted_date=None,
+            deadline=None,
+        ))
+
+    logger.info(f"Entergy RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 # ---------------------------------------------------------------------------
 # Generic HTML link scraper (used as primary and fallback)
