@@ -1313,9 +1313,13 @@ def _scrape_entergy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
       - left-side RFP menu is normal <a href> links
       - page includes many historical RFPs back to 2014
 
-    This parser keeps only current/recent RFPs based on the year in the title.
-    It intentionally does not recurse into every RFP subpage because the source
-    is mostly generation/resource procurement and can become noisy.
+    This parser keeps only current-year or future-year RFPs based on the
+    year in the title. It intentionally skips prior-year RFPs because
+    Entergy leaves historical solicitations on the page and they can
+    otherwise continue to appear as active opportunities.
+
+    It intentionally does not recurse into every RFP subpage because the
+    source is mostly generation/resource procurement and can become noisy.
     """
     html = _fetch_page(url)
     if not html:
@@ -1324,7 +1328,6 @@ def _scrape_entergy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     soup = BeautifulSoup(html, "html.parser")
 
     current_year = datetime.utcnow().year
-    min_year = current_year - 1
 
     skip_terms = [
         "archived documents",
@@ -1358,7 +1361,12 @@ def _scrape_entergy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
             continue
 
         year = int(year_match.group(1))
-        if year < min_year:
+
+        # Entergy keeps historical RFPs on the live page.
+        # For this monitor, skip prior-year solicitations so stale items like
+        # "2025 ETI Demand Response RFP" do not keep appearing in 2026 runs.
+        if year < current_year:
+            logger.info(f"Entergy RFP parser: skipping stale prior-year RFP: {title}")
             continue
 
         absolute_url = urllib.parse.urljoin(url, href)
