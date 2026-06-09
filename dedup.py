@@ -4,7 +4,7 @@ dedup.py -- Deduplication and State Persistence via Supabase
 Tracks which opportunities have already been reported so repeated
 weekly runs don't send the same RFP again.
 
-State is stored in the Supabase table `rfp_seen_opportunities` which
+State is stored in the Supabase table `opportunity_seen` which
 you created manually. This avoids needing GitHub write permissions.
 
 On each run:
@@ -14,11 +14,12 @@ On each run:
   4. Supabase handles persistence -- no file commits needed
 
 Table schema (created manually in Supabase):
-  unique_key  text   -- primary identifier (source::notice_id)
-  date_found  text   -- YYYY-MM-DD when first seen
-  expiry_date text   -- YYYY-MM-DD when this entry can be deleted
-  source      text   -- e.g. "SAM.gov", "NASEO RFP Board"
-  title       text   -- truncated title for human reference
+  monitor_type text   -- e.g. "emv", "commissioning", "rcx"
+  unique_key   text   -- primary identifier scoped by monitor_type
+  date_found   text   -- YYYY-MM-DD when first seen
+  expiry_date  text   -- YYYY-MM-DD when this entry can be deleted
+  source       text   -- e.g. "SAM.gov", "NASEO RFP Board"
+  title        text   -- truncated title for human reference
 
 KNOWN FAILURE POINTS:
   1. SUPABASE_URL and SUPABASE_KEY must be set in GitHub Secrets.
@@ -27,7 +28,7 @@ KNOWN FAILURE POINTS:
      that run (duplicates possible). Check secrets if this happens.
   2. If the Supabase table doesn't exist, inserts will fail with a
      404-style error. Make sure the table name matches exactly:
-     rfp_seen_opportunities
+     opportunity_seen
   3. The supabase-py package must be in requirements.txt. If missing,
      the import will fail and dedup will be skipped entirely.
   4. Supabase free tier has a 500MB database limit. Each row in this
@@ -49,7 +50,10 @@ logger = logging.getLogger(__name__)
 SeenSet = Dict[str, Dict[str, str]]
 
 # Supabase table name -- must match what you created manually
-TABLE_NAME = "rfp_seen_opportunities"
+SEEN_TABLE_NAME = "opportunity_seen"
+
+# Scope this monitor's records so future commissioning/RCx monitors can use the same tables
+MONITOR_TYPE = os.environ.get("MONITOR_TYPE", "emv").strip() or "emv"
 
 
 def _get_supabase_client():
@@ -123,8 +127,9 @@ def load_seen_set() -> SeenSet:
         # works correctly for YYYY-MM-DD format because ISO dates sort
         # lexicographically in the same order as chronologically.
         response = (
-            client.table(TABLE_NAME)
-            .select("unique_key, date_found, expiry_date, source, title")
+            client.table(SEEN_TABLE_NAME)
+            .select("monitor_type, unique_key, date_found, expiry_date, source, title")
+            .eq("monitor_type", MONITOR_TYPE)
             .gte("date_found", cutoff)
             .execute()
         )
@@ -161,9 +166,9 @@ def save_seen_set(opportunities: List[Opportunity]) -> bool:
         True if all inserts succeeded, False if any failed
 
     KNOWN FAILURE POINT: Supabase's upsert requires the table to have
-    unique_key set as a primary key or unique constraint. If you see
-    duplicate key errors, go to Supabase > Table Editor >
-    rfp_seen_opportunities > and set unique_key as the primary key.
+    a primary key or unique constraint matching the conflict target.
+    For this schema, opportunity_seen must have:
+    primary key (monitor_type, unique_key).
     """
     if not opportunities:
         logger.info("No opportunities to mark as seen")
@@ -182,16 +187,20 @@ def save_seen_set(opportunities: List[Opportunity]) -> bool:
     rows = []
     for opp in opportunities:
         rows.append({
-            "unique_key":  opp.unique_key(),
-            "date_found":  today,
+            "monitor_type": MONITOR_TYPE,
+            "unique_key": opp.unique_key(),
+            "date_found": today,
             "expiry_date": expiry,
-            "source":      opp.source,
-            "title":       opp.title[:100],   # Truncate for storage
+            "source": opp.source,
+            "title": opp.title[:100],  # Truncate for storage
         })
 
     try:
-        # Upsert: insert new rows, update existing ones on unique_key conflict
-        client.table(TABLE_NAME).upsert(rows).execute()
+        # Upsert: insert new rows, update existing ones on monitor_type + unique_key conflict
+        client.table(SEEN_TABLE_NAME).upsert(
+            rows,
+            on_conflict="monitor_type,unique_key",
+        ).execute()
         logger.info(f"Saved {len(rows)} entries to Supabase")
         return True
 
@@ -222,9 +231,10 @@ def expire_old_entries() -> int:
 
     try:
         response = (
-            client.table(TABLE_NAME)
+            client.table(SEEN_TABLE_NAME)
             .delete()
-            .lt("date_found", cutoff)   # Delete rows older than cutoff
+            .eq("monitor_type", MONITOR_TYPE)
+            .lt("date_found", cutoff)  # Delete rows older than cutoff
             .execute()
         )
         deleted = len(response.data or [])

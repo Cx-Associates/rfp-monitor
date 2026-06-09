@@ -34,7 +34,7 @@ Each run:
 | Feature / Source | Status             | Notes                                                                                                                            |
 |---|--------------------|----------------------------------------------------------------------------------------------------------------------------------|
 | SAM.gov federal scraping | Working            | Requires `SAM_API_KEY`. Uses keyword and NAICS searches.                                                                         |
-| Supabase deduplication | Working            | Uses `rfp_seen_opportunities` table.                                                                                             |
+| Supabase deduplication | Working            | Uses `opportunity_seen` table.                                                                                             |
 | Email digest via SendGrid | Working            | Controlled by workflow input for manual runs.                                                                                    |
 | GitHub Pages dashboard | Working            | Deploys from `main`; feature branches upload preview artifact only.                                                              |
 | Dashboard manual-review section | Working            | Shows filtered below-threshold candidates.                                                                                       |
@@ -232,10 +232,15 @@ GitHub repo → Settings → Secrets and variables → Actions
 
 ## Supabase Deduplication
 
+The table uses a composite primary key:
+
+```text
+(monitor_type, unique_key)
+
 Deduplication is stored in Supabase table:
 
 ```text
-rfp_seen_opportunities
+opportunity_seen
 ```
 
 Expected table columns:
@@ -495,7 +500,7 @@ Options:
 Check:
 
 - Supabase credentials are configured.
-- `rfp_seen_opportunities` table exists.
+- `opportunity_seen` table exists.
 - `save_seen_set()` succeeded after the prior run.
 - `force_all` was not set to `true`.
 

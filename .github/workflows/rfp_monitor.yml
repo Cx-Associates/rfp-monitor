@@ -80,6 +80,7 @@ jobs:
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MONITOR_TYPE: emv
         run: |
           mkdir -p scrapers
           touch scrapers/__init__.py
