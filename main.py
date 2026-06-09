@@ -242,8 +242,16 @@ def main():
     logger.info(f"SCORING (mode={mode})")
     logger.info("=" * 55)
     from scorer import score_split_and_sort, filter_manual_review_candidates
+    from dedup import load_suppressed_manual_review_set, filter_suppressed_manual_review
+
     scored, manual_review, all_scored = score_split_and_sort(raw_opps, mode=mode)
     manual_review = filter_manual_review_candidates(manual_review)
+
+    suppressed_manual_review = load_suppressed_manual_review_set()
+    manual_review = filter_suppressed_manual_review(
+        manual_review,
+        suppressed_manual_review,
+    )
 
     if not scored:
         logger.info(

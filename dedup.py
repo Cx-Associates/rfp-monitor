@@ -51,6 +51,7 @@ SeenSet = Dict[str, Dict[str, str]]
 
 # Supabase table name -- must match what you created manually
 SEEN_TABLE_NAME = "opportunity_seen"
+SUPPRESSED_TABLE_NAME = "manual_review_suppressed"
 
 # Scope this monitor's records so future commissioning/RCx monitors can use the same tables
 MONITOR_TYPE = os.environ.get("MONITOR_TYPE", "emv").strip() or "emv"
@@ -151,6 +152,74 @@ def load_seen_set() -> SeenSet:
         )
         return {}
 
+def load_suppressed_manual_review_set() -> SeenSet:
+    """
+    Load manually suppressed below-threshold opportunities from Supabase.
+
+    These records are used only to hide items from the dashboard's
+    manual-review section. They do not affect passing opportunities,
+    email delivery, or the main seen-set.
+    """
+    client = _get_supabase_client()
+    if not client:
+        return {}
+
+    try:
+        response = (
+            client.table(SUPPRESSED_TABLE_NAME)
+            .select("monitor_type, unique_key, suppressed_at, source, title, reason, suppressed_by")
+            .eq("monitor_type", MONITOR_TYPE)
+            .execute()
+        )
+
+        suppressed = {}
+        for row in (response.data or []):
+            key = row.get("unique_key", "")
+            if key:
+                suppressed[key] = row
+
+        logger.info(
+            f"Loaded {len(suppressed)} entries from Supabase manual-review suppression table"
+        )
+        return suppressed
+
+    except Exception as e:
+        logger.warning(
+            f"Failed to load manual-review suppression set from Supabase: {e}. "
+            f"Manual-review dashboard items will not be suppressed this run."
+        )
+        return {}
+
+
+def filter_suppressed_manual_review(
+    opportunities: List[Opportunity],
+    suppressed: SeenSet,
+) -> List[Opportunity]:
+    """
+    Remove manually suppressed opportunities from the manual-review list.
+
+    Suppression is scoped by MONITOR_TYPE in the Supabase query, so this
+    will not hide items across future commissioning or RCx monitors.
+    """
+    if not opportunities or not suppressed:
+        logger.info(
+            f"Manual-review suppression: 0 hidden, {len(opportunities)} remaining"
+        )
+        return opportunities
+
+    filtered = []
+    skipped = 0
+
+    for opp in opportunities:
+        if opp.unique_key() in suppressed:
+            skipped += 1
+            continue
+        filtered.append(opp)
+
+    logger.info(
+        f"Manual-review suppression: {skipped} hidden, {len(filtered)} remaining"
+    )
+    return filtered
 
 def save_seen_set(opportunities: List[Opportunity]) -> bool:
     """
