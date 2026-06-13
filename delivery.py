@@ -356,7 +356,7 @@ def _render_dashboard_html(
     total_cnt  = len(all_opps)
     manual_cnt = len(manual_review)
 
-    def table_row(opp: Opportunity) -> str:
+    def table_row(opp: Opportunity, allow_remove: bool = False) -> str:
         """Render one <tr> for an opportunities table."""
         is_new      = opp.unique_key() in new_keys
         new_badge   = '<span class="badge-new">NEW</span> ' if is_new else ""
@@ -373,11 +373,23 @@ def _render_dashboard_html(
         kw_str = ", ".join(opp.matched_keywords[:4]) if opp.matched_keywords else ""
         title_display = _esc(opp.title[:85]) + ("..." if len(opp.title) > 85 else "")
 
+        remove_cell = ""
+        if allow_remove:
+            remove_cell = (
+                '<td class="remove-cell">'
+                '<button type="button" class="remove-btn" '
+                'title="Hide this manual-review item" '
+                'onclick="suppressManualReview(this)">x</button>'
+                '</td>'
+            )
+
         return (
             f'<tr data-conf="{_esc(opp.confidence)}" '
             f'data-source="{_esc(opp.source)}" '
             f'data-state="{_esc(opp.state or "")}" '
             f'data-title="{_esc(opp.title.lower())}" '
+            f'data-title-full="{_esc(opp.title)}" '
+            f'data-unique-key="{_esc(opp.unique_key())}" '
             f'class="{"row-new" if is_new else ""}">'
             f"<td>{new_badge}"
             f'<a href="{_esc(opp.url)}" target="_blank">{title_display}</a></td>'
@@ -389,6 +401,7 @@ def _render_dashboard_html(
             f"<td>{deadline_str}</td>"
             f"<td>{days_html}</td>"
             f'<td style="font-size:11px;color:#666;">{_esc(kw_str)}</td>'
+            f"{remove_cell}"
             f"</tr>\n"
         )
 
@@ -396,12 +409,12 @@ def _render_dashboard_html(
         table_row(o) for o in all_opps[:config.DASHBOARD_MAX_DISPLAY]
     )
     manual_rows = "".join(
-        table_row(o) for o in manual_review[:config.DASHBOARD_MAX_DISPLAY]
+        table_row(o, allow_remove=True) for o in manual_review[:config.DASHBOARD_MAX_DISPLAY]
     )
 
     if not manual_rows:
         manual_rows = (
-            '<tr><td colspan="9" style="color:#777;font-style:italic;">'
+            '<tr><td colspan="10" style="color:#777;font-style:italic;">'
             'No below-threshold candidates for manual review.'
             '</td></tr>'
         )
@@ -456,6 +469,12 @@ def _render_dashboard_html(
     .manual-review p{{font-size:12px;color:#777;margin:8px 0 10px 0;}}
     .manual-table{{padding:8px 0 0;}}
     .manual-table table{{box-shadow:none;border:1px solid #eee;}}
+    .remove-cell{{text-align:center;width:38px;}}
+    .remove-btn{{border:0;background:#eee;color:#555;border-radius:50%;
+                 width:24px;height:24px;line-height:20px;cursor:pointer;
+                 font-weight:700;font-size:16px;}}
+    .remove-btn:hover{{background:#d32f2f;color:#fff;}}
+    .remove-btn:disabled{{opacity:.6;cursor:wait;}}
     a{{color:#0066cc;text-decoration:none;}}
     a:hover{{text-decoration:underline;}}
     #row-count{{font-size:12px;color:#888;padding:0 28px 8px;}}
@@ -478,7 +497,7 @@ def _render_dashboard_html(
     <div class="stat"><div class="n" style="color:#e65100">{medium_cnt}</div>
       <div class="l">Medium confidence</div></div>
     <div class="stat"><div class="n">{total_cnt}</div><div class="l">Total active</div></div>
-    <div class="stat"><div class="n">{manual_cnt}</div><div class="l">Manual review</div></div>
+    <div class="stat"><div class="n" id="manual-count">{manual_cnt}</div><div class="l">Manual review</div></div>
   </div>
 
   <div class="filters">
@@ -520,7 +539,7 @@ def _render_dashboard_html(
   </div>
 
   <details class="manual-review">
-    <summary>Manual review candidates ({manual_cnt} below threshold)</summary>
+    <summary>Manual review candidates (<span id="manual-summary-count">{manual_cnt}</span> below threshold)</summary>
     <p>
       These items were scraped and scored but did not meet the current inclusion
       threshold for the main dashboard/email digest. Review periodically for
@@ -532,10 +551,10 @@ def _render_dashboard_html(
           <tr>
             <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
             <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
-            <th>Keywords</th>
+            <th>Keywords</th><th></th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="manual-review-body">
           {manual_rows}
         </tbody>
       </table>
@@ -573,6 +592,76 @@ def _render_dashboard_html(
       document.getElementById('f-new').checked = false;
       applyFilters();
     }}
+    async function suppressManualReview(button) {{
+      const row = button.closest('tr');
+      if (!row) return;
+
+      let token = localStorage.getItem('rfpAdminToken') || '';
+      if (!token) {{
+        token = prompt('Enter dashboard removal token');
+        if (!token) return;
+        localStorage.setItem('rfpAdminToken', token);
+      }}
+
+      const payload = {{
+        monitor_type: 'emv',
+        unique_key: row.dataset.uniqueKey || '',
+        source: row.dataset.source || '',
+        title: row.dataset.titleFull || row.dataset.title || '',
+        reason: 'manual_dashboard_dismissal',
+        suppressed_by: 'dashboard'
+      }};
+
+      button.disabled = true;
+      button.textContent = '...';
+
+      try {{
+        const response = await fetch(
+          'https://udxcbyoohgzdkjxytxzg.functions.supabase.co/suppress-manual-review',
+          {{
+            method: 'POST',
+            headers: {{
+              'Content-Type': 'application/json',
+              'x-rfp-admin-token': token
+            }},
+            body: JSON.stringify(payload)
+          }}
+        );
+
+        const result = await response.json().catch(() => ({{}}));
+
+        if (!response.ok || !result.ok) {{
+          if (response.status === 401) {{
+            localStorage.removeItem('rfpAdminToken');
+            alert('Removal token was rejected. Try again with the correct token.');
+          }} else {{
+            alert('Could not hide item: ' + (result.error || response.status));
+          }}
+          button.disabled = false;
+          button.textContent = 'x';
+          return;
+        }}
+
+        row.remove();
+
+        const manualRows = document.querySelectorAll('#manual-review-body tr[data-unique-key]');
+        const manualCount = document.getElementById('manual-count');
+        const manualSummaryCount = document.getElementById('manual-summary-count');
+
+        if (manualCount) manualCount.textContent = manualRows.length;
+        if (manualSummaryCount) manualSummaryCount.textContent = manualRows.length;
+
+        if (manualRows.length === 0) {{
+          document.getElementById('manual-review-body').innerHTML =
+            '<tr><td colspan="10" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+        }}
+      }} catch (err) {{
+        alert('Could not hide item. Check network connection and try again.');
+        button.disabled = false;
+        button.textContent = 'x';
+      }}
+    }}
+
     // Initialize row count on load
     applyFilters();
   </script>
