@@ -36,6 +36,7 @@ KNOWN FAILURE POINTS:
      won't be an issue.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -52,6 +53,7 @@ SeenSet = Dict[str, Dict[str, str]]
 # Supabase table name -- must match what you created manually
 SEEN_TABLE_NAME = "opportunity_seen"
 SUPPRESSED_TABLE_NAME = "manual_review_suppressed"
+ACTIVE_TABLE_NAME = "opportunity_active"
 
 # Scope this monitor's records so future commissioning/RCx monitors can use the same tables
 MONITOR_TYPE = os.environ.get("MONITOR_TYPE", "emv").strip() or "emv"
@@ -315,6 +317,223 @@ def expire_old_entries() -> int:
         logger.warning(f"Failed to expire old Supabase entries: {e}")
         return 0
 
+
+
+def _opportunity_from_active_row(row: dict) -> Opportunity:
+    """
+    Rebuild an Opportunity object from the JSON payload stored in
+    opportunity_active.
+    """
+    data = row.get("opportunity") or {}
+    if isinstance(data, str):
+        data = json.loads(data)
+
+    allowed = {
+        "source",
+        "notice_id",
+        "url",
+        "title",
+        "description",
+        "issuer",
+        "posted_date",
+        "deadline",
+        "state",
+        "naics_code",
+        "set_aside",
+        "contact_name",
+        "contact_email",
+        "contact_phone",
+        "relevance_score",
+        "matched_keywords",
+        "confidence",
+        "found_at",
+    }
+
+    kwargs = {k: v for k, v in data.items() if k in allowed}
+
+    kwargs.setdefault("source", row.get("source") or "Unknown")
+    kwargs.setdefault("notice_id", row.get("unique_key") or "")
+    kwargs.setdefault("url", data.get("url") or "")
+    kwargs.setdefault("title", row.get("title") or data.get("title") or "Untitled")
+    kwargs.setdefault("description", data.get("description") or "")
+    kwargs.setdefault("issuer", data.get("issuer") or row.get("source") or "Unknown")
+
+    return Opportunity(**kwargs)
+
+
+def _active_visible_until(opp: Opportunity, first_seen: str) -> str:
+    """
+    Determine how long a passing opportunity should stay visible on the
+    dashboard.
+
+    If the opportunity has a deadline, keep it visible through that deadline.
+    If it has no deadline, keep it visible for 30 days from first_seen.
+    """
+    if opp.deadline:
+        return opp.deadline
+
+    try:
+        first_seen_dt = datetime.strptime(first_seen, "%Y-%m-%d")
+    except ValueError:
+        first_seen_dt = datetime.utcnow()
+
+    return (first_seen_dt + timedelta(days=30)).strftime("%Y-%m-%d")
+
+
+def upsert_active_dashboard_opportunities(opportunities: List[Opportunity]) -> bool:
+    """
+    Upsert passing opportunities into Supabase for dashboard persistence.
+
+    This does not affect email deduplication. It only controls what remains
+    visible on the dashboard after the first run where an opportunity was found.
+    """
+    if not opportunities:
+        logger.info("No passing opportunities to upsert into active dashboard cache")
+        return True
+
+    client = _get_supabase_client()
+    if not client:
+        logger.warning(
+            "Active dashboard cache skipped because Supabase is unavailable."
+        )
+        return False
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    keys = [opp.unique_key() for opp in opportunities]
+
+    try:
+        existing_response = (
+            client.table(ACTIVE_TABLE_NAME)
+            .select("unique_key, first_seen")
+            .eq("monitor_type", MONITOR_TYPE)
+            .in_("unique_key", keys)
+            .execute()
+        )
+
+        existing_first_seen = {
+            row.get("unique_key"): row.get("first_seen")
+            for row in (existing_response.data or [])
+            if row.get("unique_key")
+        }
+
+        rows = []
+        for opp in opportunities:
+            key = opp.unique_key()
+            first_seen = existing_first_seen.get(key) or today
+            visible_until = _active_visible_until(opp, first_seen)
+
+            rows.append({
+                "monitor_type": MONITOR_TYPE,
+                "unique_key": key,
+                "first_seen": first_seen,
+                "last_seen": today,
+                "visible_until": visible_until,
+                "source": opp.source,
+                "title": opp.title[:500],
+                "deadline": opp.deadline,
+                "opportunity": opp.to_dict(),
+            })
+
+        (
+            client.table(ACTIVE_TABLE_NAME)
+            .upsert(rows, on_conflict="monitor_type,unique_key")
+            .execute()
+        )
+
+        logger.info(
+            f"Active dashboard cache: upserted {len(rows)} passing opportunities"
+        )
+        return True
+
+    except Exception as e:
+        logger.warning(f"Failed to upsert active dashboard cache: {e}")
+        return False
+
+
+def load_active_dashboard_opportunities() -> List[Opportunity]:
+    """
+    Load active dashboard opportunities from Supabase.
+
+    Active means visible_until is today or later. This lets the dashboard keep
+    showing already-found RFPs until their due date, or for 30 days if no due
+    date exists.
+    """
+    client = _get_supabase_client()
+    if not client:
+        logger.warning(
+            "Active dashboard cache unavailable because Supabase is unavailable."
+        )
+        return []
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    try:
+        response = (
+            client.table(ACTIVE_TABLE_NAME)
+            .select("unique_key, source, title, deadline, visible_until, opportunity")
+            .eq("monitor_type", MONITOR_TYPE)
+            .gte("visible_until", today)
+            .execute()
+        )
+
+        opportunities = []
+        for row in (response.data or []):
+            try:
+                opportunities.append(_opportunity_from_active_row(row))
+            except Exception as row_error:
+                logger.warning(
+                    f"Skipping malformed active dashboard row "
+                    f"{row.get('unique_key')}: {row_error}"
+                )
+
+        opportunities.sort(
+            key=lambda opp: (
+                -opp.relevance_score,
+                opp.deadline or "9999-12-31",
+                opp.source,
+                opp.title,
+            )
+        )
+
+        logger.info(
+            f"Active dashboard cache: loaded {len(opportunities)} active opportunities"
+        )
+        return opportunities
+
+    except Exception as e:
+        logger.warning(f"Failed to load active dashboard cache: {e}")
+        return []
+
+
+def merge_active_dashboard_opportunities(
+    current: List[Opportunity],
+    active: List[Opportunity],
+) -> List[Opportunity]:
+    """
+    Merge current passing opportunities with active cached opportunities.
+
+    Current opportunities win over cached copies so the dashboard uses the
+    latest score, deadline, and metadata when the item is still scraped.
+    """
+    merged = {opp.unique_key(): opp for opp in active}
+    for opp in current:
+        merged[opp.unique_key()] = opp
+
+    opportunities = list(merged.values())
+    opportunities.sort(
+        key=lambda opp: (
+            -opp.relevance_score,
+            opp.deadline or "9999-12-31",
+            opp.source,
+            opp.title,
+        )
+    )
+
+    logger.info(
+        f"Active dashboard merge: {len(current)} current + "
+        f"{len(active)} cached = {len(opportunities)} dashboard opportunities"
+    )
+    return opportunities
 
 def filter_new_opportunities(
     opportunities: List[Opportunity],

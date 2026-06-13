@@ -253,16 +253,36 @@ def main():
         suppressed_manual_review,
     )
 
+    # -------------------------------------------------------------------------
+    # Step 3b: Update/load active dashboard cache
+    # -------------------------------------------------------------------------
+    if args.dry_run:
+        dashboard_opps = scored
+    else:
+        from dedup import (
+            upsert_active_dashboard_opportunities,
+            load_active_dashboard_opportunities,
+            merge_active_dashboard_opportunities,
+        )
+
+        upsert_active_dashboard_opportunities(scored)
+        active_dashboard_opps = load_active_dashboard_opportunities()
+        dashboard_opps = merge_active_dashboard_opportunities(
+            scored,
+            active_dashboard_opps,
+        )
+
     if not scored:
         logger.info(
             f"No opportunities passed the relevance threshold "
-            f"(mode={mode}). Generating dashboard with manual-review candidates."
+            f"(mode={mode}). Generating dashboard with active cached opportunities "
+            f"and manual-review candidates."
         )
         if not args.dry_run:
             from delivery import generate_dashboard
             generate_dashboard(
                 [],
-                [],
+                dashboard_opps,
                 mode=mode,
                 manual_review=manual_review,
             )
@@ -310,7 +330,7 @@ def main():
     email_ok    = send_email_digest(new_opps, mode=mode)
     dashboard_ok = generate_dashboard(
         new_opps,
-        scored,
+        dashboard_opps,
         mode=mode,
         manual_review=manual_review,
     )
