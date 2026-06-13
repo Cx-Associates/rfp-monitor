@@ -1799,6 +1799,22 @@ def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
             if due_match:
                 deadline = normalize_date(due_match.group(1))
 
+        if deadline:
+            try:
+                deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+                today = datetime.utcnow().date()
+                if deadline_date < today:
+                    logger.info(
+                        f"AESP RFP parser: skipping expired opportunity "
+                        f"with deadline {deadline}: {title}"
+                    )
+                    continue
+            except ValueError:
+                logger.warning(
+                    f"AESP RFP parser: could not parse deadline {deadline!r} "
+                    f"for {title}; keeping opportunity"
+                )
+
         opportunities.append(Opportunity(
             source=name,
             notice_id=chosen_url,
