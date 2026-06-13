@@ -2,7 +2,7 @@ name: CxA RFP Monitor
 
 on:
   schedule:
-    - cron: "17 12 * * 1"
+    - cron: "57 9 * * 1"
   workflow_dispatch:
     inputs:
       mode:
