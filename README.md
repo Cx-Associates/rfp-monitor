@@ -9,7 +9,10 @@ The monitor runs through GitHub Actions and produces two outputs:
 
 The main table shows opportunities that pass the scoring threshold. The manual-review section shows filtered below-threshold opportunities that may still be worth occasional human review.
 
-The dashboard also supports **manual suppression** of manual-review rows. Authorized users can click the X button on a manual-review item, enter the removal token, and permanently hide that item from future dashboard generations.
+The dashboard also supports:
+
+1. **Active opportunity persistence** through Supabase, so passing opportunities stay visible until their due date, or for 30 days if no due date is available.
+2. **Manual suppression** of manual-review rows. Authorized users can click the X button on a manual-review item, enter the removal token, and permanently hide that item from future dashboard generations.
 
 ---
 
@@ -27,9 +30,17 @@ Each run:
    * below-threshold manual-review candidates,
    * all scored opportunities.
 6. Loads the Supabase manual-review suppression table and removes suppressed manual-review rows.
-7. Deduplicates passing opportunities against previously reported records in Supabase.
-8. Sends an email digest for new passing opportunities when email delivery is enabled.
-9. Generates a static GitHub Pages dashboard.
+7. Updates the Supabase active dashboard cache with passing opportunities.
+8. Loads active cached dashboard opportunities that should remain visible.
+9. Merges current passing opportunities with active cached opportunities.
+10. Deduplicates passing opportunities against previously reported records in Supabase.
+11. Sends an email digest for new passing opportunities when email delivery is enabled.
+12. Generates a static GitHub Pages dashboard.
+
+The important distinction is:
+
+* **Email digest** is for newly identified passing opportunities only.
+* **Dashboard** is an active opportunity board. Passing opportunities remain visible until their deadline, or for 30 days from first seen if no deadline is known.
 
 ---
 
@@ -38,7 +49,8 @@ Each run:
 | Feature / Source                   | Status             | Notes                                                                                                                                                                         |
 | ---------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SAM.gov federal scraping           | Working            | Requires `SAM_API_KEY`. Uses keyword and NAICS searches.                                                                                                                      |
-| Supabase deduplication             | Working            | Uses `opportunity_seen` table.                                                                                                                                                |
+| Supabase deduplication             | Working            | Uses `opportunity_seen` table. Controls whether opportunities are treated as new for email/reporting.                                                                         |
+| Supabase active dashboard cache    | Working            | Uses `opportunity_active` table. Keeps passing opportunities visible until deadline, or for 30 days if no deadline exists.                                                    |
 | Supabase manual-review suppression | Working            | Uses `manual_review_suppressed` table.                                                                                                                                        |
 | Dashboard manual-review X button   | Working            | Calls Supabase Edge Function and writes suppression records.                                                                                                                  |
 | Supabase Edge Function             | Working            | Function name: `suppress-manual-review`.                                                                                                                                      |
@@ -77,7 +89,7 @@ rfp-monitor/
 ├── config.py                                    # Keywords, sources, thresholds, email settings
 ├── models.py                                    # Opportunity dataclass and shared utilities
 ├── scorer.py                                    # Keyword scoring and manual-review filtering
-├── dedup.py                                     # Supabase deduplication + manual suppression filtering
+├── dedup.py                                     # Supabase deduplication, active cache, and suppression filtering
 ├── delivery.py                                  # SendGrid email + GitHub Pages dashboard generator
 ├── requirements.txt                             # Python dependencies
 ├── docs/
@@ -100,25 +112,64 @@ rfp-monitor/
 
 ## Main Run Flow
 
-The full monitoring cycle is handled in `main.py`:
+The full monitoring cycle is handled in `main.py`.
 
 1. Parse workflow/CLI arguments.
-2. Run selected scrapers.
-3. Score all raw opportunities.
-4. Filter below-threshold candidates for manual review.
-5. Load manual-review suppressions from Supabase.
-6. Remove suppressed manual-review candidates from the dashboard list.
-7. Load Supabase deduplication records.
-8. Deduplicate passing opportunities.
-9. Send email digest if SendGrid is available/enabled.
-10. Generate dashboard.
-11. Save newly delivered opportunities to Supabase if at least one delivery channel succeeds.
 
-If no opportunities pass the scoring threshold, the dashboard is still generated with manual-review candidates as long as raw opportunities were scraped and survived the manual-review cleanup filter.
+2. Run selected scrapers.
+
+3. Score all raw opportunities.
+
+4. Filter below-threshold candidates for manual review.
+
+5. Load manual-review suppressions from Supabase.
+
+6. Remove suppressed manual-review candidates from the dashboard list.
+
+7. Update/load active dashboard cache:
+
+   * Upsert current passing opportunities into `opportunity_active`.
+   * Set `visible_until` to the opportunity deadline if available.
+   * If no deadline is available, set `visible_until` to 30 days after first seen.
+   * Load all active cached opportunities where `visible_until` is today or later.
+   * Merge current passing opportunities with active cached opportunities.
+
+8. Load Supabase deduplication records.
+
+9. Deduplicate current passing opportunities.
+
+10. Send email digest if SendGrid is available/enabled.
+
+11. Generate dashboard using the merged active dashboard opportunity list.
+
+12. Save newly delivered opportunities to Supabase if at least one delivery channel succeeds.
+
+The code is designed for partial success. One broken source should not stop the full run.
+
+### No-Passing-Opportunity Behavior
+
+If no opportunities pass the scoring threshold, the dashboard is still generated with active cached opportunities and manual-review candidates as long as raw opportunities were scraped and survived the manual-review cleanup filter.
 
 If all scrapers return zero raw opportunities, the run generates an empty dashboard.
 
-The code is designed for partial success. One broken source should not stop the full run.
+---
+
+## Dashboard Persistence Behavior
+
+The dashboard is intended to act as an active opportunity board, not just a list of items found in the most recent scrape.
+
+Passing opportunities are cached in Supabase table `opportunity_active`.
+
+Visibility rules:
+
+| Opportunity Type | Dashboard Visibility Rule                    |
+| ---------------- | -------------------------------------------- |
+| Has deadline     | Remains visible through the deadline date.   |
+| No deadline      | Remains visible for 30 days from first seen. |
+
+This protects against source-page drift or temporary scraper misses. For example, if an RFP is scraped and scored once, but the source page temporarily stops listing it, the dashboard can still show it until its `visible_until` date.
+
+The dashboard cache does **not** change email behavior. Email deduplication still uses `opportunity_seen`, so previously identified opportunities are not repeatedly emailed just because they remain visible on the dashboard.
 
 ---
 
@@ -152,7 +203,7 @@ GitHub → Actions → CxA RFP Monitor → Run workflow
 
 ### Recommended Manual Test Settings
 
-Dashboard-only test without email:
+Dashboard and Supabase active-cache test without email:
 
 ```text
 mode: broad
@@ -162,12 +213,22 @@ force_all: false
 send_email: false
 ```
 
-Full-source dashboard test without email:
+Full-source dashboard and active-cache test without email:
 
 ```text
 mode: broad
 dry_run: false
 sources: all
+force_all: false
+send_email: false
+```
+
+Scrape/scoring-only test with no delivery or state update:
+
+```text
+mode: broad
+dry_run: true
+sources: utilities
 force_all: false
 send_email: false
 ```
@@ -191,9 +252,10 @@ The scheduled Monday run is the real production behavior. It should:
 1. Run from `main`.
 2. Use GitHub Actions secrets.
 3. Deduplicate using Supabase.
-4. Send the email digest.
-5. Regenerate and publish the live dashboard.
-6. Save newly delivered opportunities to Supabase.
+4. Update/load active dashboard opportunities from Supabase.
+5. Send the email digest.
+6. Regenerate and publish the live dashboard.
+7. Save newly delivered opportunities to Supabase.
 
 Do not manually run the production workflow unless you intentionally want to send an email digest.
 
@@ -234,6 +296,12 @@ For manual workflow runs:
 
 Scheduled production runs are expected to send the digest.
 
+Important distinction:
+
+* `dry_run: false` allows real delivery/state behavior.
+* `send_email: false` prevents email delivery for manual workflow runs.
+* A useful dashboard/Supabase test usually uses `dry_run: false` and `send_email: false`.
+
 Email settings are configured in `config.py`:
 
 ```python
@@ -255,14 +323,14 @@ These are configured under:
 GitHub repo → Settings → Secrets and variables → Actions
 ```
 
-| Secret             | Purpose                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `SAM_API_KEY`      | SAM.gov federal opportunities API.                                                     |
-| `SENDGRID_API_KEY` | SendGrid email delivery.                                                               |
-| `SUPABASE_URL`     | Supabase project URL for deduplication and suppression filtering during workflow runs. |
-| `SUPABASE_KEY`     | Supabase service/API key used by Python deduplication logic.                           |
-| `GOOGLE_CSE_KEY`   | Google Custom Search key; currently unused/disabled.                                   |
-| `GOOGLE_CSE_ID`    | Google Custom Search engine ID; currently unused/disabled.                             |
+| Secret             | Purpose                                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `SAM_API_KEY`      | SAM.gov federal opportunities API.                                                                              |
+| `SENDGRID_API_KEY` | SendGrid email delivery.                                                                                        |
+| `SUPABASE_URL`     | Supabase project URL for deduplication, active dashboard cache, and suppression filtering during workflow runs. |
+| `SUPABASE_KEY`     | Supabase service/API key used by Python Supabase logic.                                                         |
+| `GOOGLE_CSE_KEY`   | Google Custom Search key; currently unused/disabled.                                                            |
+| `GOOGLE_CSE_ID`    | Google Custom Search engine ID; currently unused/disabled.                                                      |
 
 Important distinction:
 
@@ -275,12 +343,13 @@ Do not commit any secret values to the repository.
 
 ## Supabase Tables
 
-The monitor uses two Supabase tables:
+The monitor uses three Supabase tables:
 
 1. `opportunity_seen`
-2. `manual_review_suppressed`
+2. `opportunity_active`
+3. `manual_review_suppressed`
 
-Both are scoped by `monitor_type`, which defaults to:
+All are scoped by `monitor_type`, which defaults to:
 
 ```text
 emv
@@ -315,6 +384,57 @@ grant select, insert, update, delete
 on public.opportunity_seen
 to service_role;
 ```
+
+### Table: `opportunity_active`
+
+This table stores passing opportunities that should remain visible on the dashboard.
+
+Expected schema:
+
+```sql
+create table if not exists public.opportunity_active (
+  monitor_type text not null,
+  unique_key text not null,
+  first_seen text,
+  last_seen text,
+  visible_until text,
+  source text,
+  title text,
+  deadline text,
+  opportunity jsonb,
+  primary key (monitor_type, unique_key)
+);
+```
+
+Expected grants:
+
+```sql
+grant usage on schema public to service_role;
+
+grant select, insert, update, delete
+on public.opportunity_active
+to service_role;
+```
+
+Recommended verification query:
+
+```sql
+select
+  source,
+  title,
+  deadline,
+  first_seen,
+  last_seen,
+  visible_until
+from public.opportunity_active
+where monitor_type = 'emv'
+order by visible_until, source, title;
+```
+
+Expected behavior:
+
+* Opportunities with deadlines should have `visible_until` equal to the deadline.
+* Opportunities without deadlines should have `visible_until` equal to `first_seen + 30 days`.
 
 ### Table: `manual_review_suppressed`
 
@@ -354,7 +474,7 @@ Deduplication is handled in `dedup.py`.
 On each non-dry run:
 
 1. Load non-expired `opportunity_seen` rows from Supabase.
-2. Compare passing opportunities against the seen-set.
+2. Compare current passing opportunities against the seen-set.
 3. Treat unseen passing opportunities as new.
 4. After successful delivery, save the new opportunities to `opportunity_seen`.
 
@@ -375,6 +495,48 @@ SUPABASE_URL or SUPABASE_KEY not set in environment. Deduplication will be skipp
 ```
 
 That warning is expected for local shells without Supabase environment variables. The scheduled GitHub Actions run should use the GitHub secrets.
+
+---
+
+## Supabase Active Dashboard Cache
+
+Active dashboard persistence is handled in `dedup.py`.
+
+Main helper functions:
+
+```python
+upsert_active_dashboard_opportunities()
+load_active_dashboard_opportunities()
+merge_active_dashboard_opportunities()
+```
+
+On each non-dry run:
+
+1. Current passing opportunities are upserted into `opportunity_active`.
+
+2. Existing `first_seen` dates are preserved.
+
+3. `last_seen` is updated to the current run date.
+
+4. `visible_until` is calculated:
+
+   * deadline date, if the opportunity has a deadline,
+   * otherwise `first_seen + 30 days`.
+
+5. Active rows are loaded where:
+
+```sql
+visible_until >= today
+```
+
+6. Current passing opportunities are merged with cached active opportunities.
+7. Current versions win over cached versions if the same unique key appears in both lists.
+
+This means a previously identified RFP can remain visible on the dashboard even if it is not scraped again in a later run, as long as it has not passed its `visible_until` date.
+
+This cache is separate from the email seen-set. Keeping an opportunity visible on the dashboard does not cause repeat emails.
+
+If Supabase credentials are missing or unavailable, the active dashboard cache is skipped and the dashboard falls back to the currently scored opportunities only.
 
 ---
 
@@ -517,7 +679,7 @@ The code separates results into:
 2. Below-threshold manual-review candidates.
 3. All scored opportunities.
 
-The dashboard displays passing opportunities in the main table. A filtered subset of below-threshold opportunities appears in the collapsed manual-review section.
+The dashboard displays passing and active cached opportunities in the main table. A filtered subset of below-threshold opportunities appears in the collapsed manual-review section.
 
 Manual-review filtering removes obvious navigation/support links such as:
 
@@ -668,6 +830,41 @@ Run utility dry run:
 python main.py --dry-run --sources utilities --mode broad
 ```
 
+Test active dashboard cache locally if Supabase env vars are set:
+
+```powershell
+@'
+from scrapers.web_sources import fetch_utility_sources
+from scorer import score_split_and_sort
+from dedup import (
+    upsert_active_dashboard_opportunities,
+    load_active_dashboard_opportunities,
+    merge_active_dashboard_opportunities,
+)
+
+raw = fetch_utility_sources()
+scored, manual_review, all_scored = score_split_and_sort(raw, mode="broad")
+
+print("raw:", len(raw))
+print("scored:", len(scored))
+
+ok = upsert_active_dashboard_opportunities(scored)
+print("active upsert ok:", ok)
+
+active = load_active_dashboard_opportunities()
+print("active loaded:", len(active))
+
+merged = merge_active_dashboard_opportunities(scored, active)
+print("dashboard merged:", len(merged))
+
+for opp in merged[:15]:
+    print(opp.title, "| deadline=", opp.deadline, "| source=", opp.source)
+'@ | Set-Content .\test_active_dashboard_cache.py -Encoding UTF8
+
+python .\test_active_dashboard_cache.py
+Remove-Item .\test_active_dashboard_cache.py -ErrorAction SilentlyContinue
+```
+
 Check git status:
 
 ```powershell
@@ -740,22 +937,49 @@ where monitor_type = 'emv'
 
 The item may reappear on the next dashboard generation if it is still scraped and still qualifies for manual review.
 
+### Inspect active dashboard opportunities
+
+Use:
+
+```sql
+select
+  source,
+  title,
+  deadline,
+  first_seen,
+  last_seen,
+  visible_until
+from public.opportunity_active
+where monitor_type = 'emv'
+order by visible_until, source, title;
+```
+
+### Remove an active dashboard opportunity manually
+
+Use only if an opportunity was cached incorrectly or should no longer appear before its visible-until date:
+
+```sql
+delete from public.opportunity_active
+where monitor_type = 'emv'
+  and unique_key = 'PASTE_UNIQUE_KEY_HERE';
+```
+
 ---
 
 ## Known Issues / Future Work
 
-| Item                                        | Status / Next Step                                                                                                                                                               |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| NYISO Procurement                           | Current configured URL returns 404. Need replacement source or disable source.                                                                                                   |
-| National Grid                               | JavaScript-rendered; requires Playwright or alternate static RFP feed.                                                                                                           |
-| Avangrid / United Illuminating              | JavaScript-rendered; requires Playwright or targeted static page if available.                                                                                                   |
-| Google CSE                                  | Disabled because current Google project/API access is blocked. Re-enable only with an eligible API key/project.                                                                  |
-| Generic scrapers                            | Can still collect old PDFs or broader informational pages. Manual-review section helps surface these without polluting the main table.                                           |
-| Source drift                                | Website redesigns may silently reduce candidates to zero. If a normally productive source drops to zero, inspect the HTML and update selectors.                                  |
-| PJM solicitations                           | Configured URL appears broken or no longer exposes a useful solicitation page. Disable or replace once a reliable static PJM RFP/procurement source is identified.               |
-| COMMBUYS noise                              | COMMBUYS can produce many below-threshold manual-review rows. Use suppression or source-specific filtering if it becomes too noisy.                                              |
-| Local Supabase warning                      | Local dry runs may warn that `SUPABASE_URL` / `SUPABASE_KEY` are missing. This is expected unless those variables are set locally.                                               |
-| Deprecation warning for `datetime.utcnow()` | Python may warn that `datetime.utcnow()` is deprecated in newer versions. This is not currently breaking the workflow but can be cleaned up later with timezone-aware datetimes. |
+| Item                                        | Status / Next Step                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| NYISO Procurement                           | Current configured URL returns 404. Need replacement source or disable source.                                                                                                             |
+| National Grid                               | JavaScript-rendered; requires Playwright or alternate static RFP feed.                                                                                                                     |
+| Avangrid / United Illuminating              | JavaScript-rendered; requires Playwright or targeted static page if available.                                                                                                             |
+| Google CSE                                  | Disabled because current Google project/API access is blocked. Re-enable only with an eligible API key/project.                                                                            |
+| Generic scrapers                            | Can still collect old PDFs or broader informational pages. Manual-review section helps surface these without polluting the main table.                                                     |
+| Source drift                                | Website redesigns may silently reduce candidates to zero. Active dashboard cache protects passing opportunities after first detection, but source-specific parsers still need maintenance. |
+| PJM solicitations                           | Configured URL appears broken or no longer exposes a useful solicitation page. Disable or replace once a reliable static PJM RFP/procurement source is identified.                         |
+| COMMBUYS noise                              | COMMBUYS can produce many below-threshold manual-review rows. Use suppression or source-specific filtering if it becomes too noisy.                                                        |
+| Local Supabase warning                      | Local dry runs may warn that `SUPABASE_URL` / `SUPABASE_KEY` are missing. This is expected unless those variables are set locally.                                                         |
+| Deprecation warning for `datetime.utcnow()` | Python may warn that `datetime.utcnow()` is deprecated in newer versions. This is not currently breaking the workflow but can be cleaned up later with timezone-aware datetimes.           |
 
 ---
 
@@ -764,33 +988,46 @@ The item may reappear on the next dashboard generation if it is still scraped an
 Before making the monitor fully live:
 
 1. Confirm `EMAIL_FROM` and `EMAIL_TO` in `config.py`.
+
 2. Confirm SendGrid sender/domain authentication.
+
 3. Confirm GitHub Pages is set to deploy through GitHub Actions.
+
 4. Confirm GitHub Actions secrets:
 
    * `SAM_API_KEY`
    * `SENDGRID_API_KEY`
    * `SUPABASE_URL`
    * `SUPABASE_KEY`
+
 5. Confirm Supabase Edge Function secrets:
 
    * `RFP_ADMIN_TOKEN`
    * `RFP_SUPABASE_URL`
    * `RFP_SUPABASE_SERVICE_ROLE_KEY`
+
 6. Confirm Supabase tables:
 
    * `opportunity_seen`
+   * `opportunity_active`
    * `manual_review_suppressed`
-7. Confirm scheduled Monday run is enabled.
-8. Let the scheduled Monday run execute if validating schedule behavior.
-9. After scheduled run completes, check:
 
-   * GitHub Actions run event is `schedule`.
-   * Dashboard timestamp updated.
-   * Email digest was sent.
-   * AESP expired opportunities were skipped.
-   * Manual-review rows show X buttons.
-   * Suppressed rows stay hidden after the next dashboard generation.
+7. Confirm scheduled Monday run is enabled.
+
+8. Test feature-branch dashboard artifact before merge when code changes dashboard behavior.
+
+9. Let the scheduled Monday run execute if validating schedule behavior.
+
+10. After scheduled run completes, check:
+
+* GitHub Actions run event is `schedule`.
+* Dashboard timestamp updated.
+* Email digest was sent.
+* AESP expired opportunities were skipped.
+* Entergy stale prior-year opportunities were skipped.
+* Active opportunities were loaded from `opportunity_active`.
+* Manual-review rows show X buttons.
+* Suppressed rows stay hidden after the next dashboard generation.
 
 ---
 
@@ -819,6 +1056,37 @@ Check whether the workflow was run from `main`.
 Feature branches upload a preview artifact but do not deploy to GitHub Pages.
 
 Also check the live dashboard timestamp. If it is old, the workflow has not regenerated and published the dashboard yet.
+
+### Dashboard does not show an expected RFP
+
+Check whether the RFP exists in the active cache:
+
+```sql
+select
+  source,
+  title,
+  deadline,
+  first_seen,
+  last_seen,
+  visible_until
+from public.opportunity_active
+where monitor_type = 'emv'
+  and title ilike '%PASTE PART OF TITLE HERE%';
+```
+
+If it is in `opportunity_active` and `visible_until` is today or later, it should appear in the dashboard after a successful dashboard-generation run.
+
+If it is not in `opportunity_active`, the opportunity may not have passed scoring on any successful non-dry run after the active-cache feature was added.
+
+### Dashboard shows an old RFP
+
+Check the `visible_until` date in `opportunity_active`.
+
+If it has a deadline, the row is expected to remain visible through the deadline.
+
+If it has no deadline, the row is expected to remain visible for 30 days from `first_seen`.
+
+If the row should be removed early, delete it manually from `opportunity_active`.
 
 ### X buttons are missing from the live dashboard
 
@@ -859,6 +1127,25 @@ The Supabase Edge Function secret `RFP_SUPABASE_SERVICE_ROLE_KEY` is wrong or st
 
 Fix the Supabase Function secret and redeploy/retest if needed.
 
+### Active dashboard cache did not update
+
+Check the workflow log for messages like:
+
+```text
+Active dashboard cache: upserted X passing opportunities
+Active dashboard cache: loaded X active opportunities
+Active dashboard merge: X current + Y cached = Z dashboard opportunities
+```
+
+If the log says Supabase is unavailable, confirm GitHub Actions secrets:
+
+```text
+SUPABASE_URL
+SUPABASE_KEY
+```
+
+Also confirm the `opportunity_active` table exists and service-role grants were applied.
+
 ### Too many false positives
 
 Options:
@@ -879,6 +1166,7 @@ Options:
 * Add missing source-specific terms.
 * Inspect whether the source page changed and the scraper returned zero candidates.
 * Add a dedicated parser for that source.
+* Check whether the item is present in `opportunity_active` but has expired from the dashboard.
 
 ### Duplicate opportunities are appearing
 
@@ -906,6 +1194,8 @@ The code is intentionally organized so most routine tuning happens in `config.py
 Use dedicated parsers for important sources when generic scraping creates false positives. The dedicated parser approach is currently used for several sources where page structure, deadline context, or closed/open status matters.
 
 The dashboard is static HTML with client-side filtering. It does not require a server.
+
+The active dashboard cache is managed server-side through the Python workflow and Supabase. It exists to keep valid RFPs visible until their due date or for 30 days if no due date is available.
 
 The dashboard X button is implemented with client-side JavaScript calling a Supabase Edge Function. The token is never committed to the repository or embedded in the static dashboard.
 
