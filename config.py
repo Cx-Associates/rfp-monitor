@@ -173,6 +173,216 @@ KEYWORDS_TERTIARY = [
 # ---------------------------------------------------------------------------
 # RELEVANCE SCORING WEIGHTS AND THRESHOLDS
 #
+
+# ---------------------------------------------------------------------------
+# COMMISSIONING / RCx KEYWORDS
+#
+# These are used when monitor_type="commissioning".
+# The tiers intentionally mirror the EM&V scoring structure:
+#   - primary: direct commissioning / BECx terms
+#   - secondary: related testing, verification, LEED Cx, enclosure testing
+#   - tertiary: broader project indicators; broad mode only
+# ---------------------------------------------------------------------------
+
+COMMISSIONING_KEYWORDS_PRIMARY = [
+    # MEP / whole-building commissioning
+    "commissioning",
+    "building commissioning",
+    "fundamental commissioning",
+    "enhanced commissioning",
+    "existing building commissioning",
+    "retro-commissioning",
+    "retrocommissioning",
+    "re-commissioning",
+    "recommissioning",
+    "continuous commissioning",
+    "monitoring-based commissioning",
+    "monitoring based commissioning",
+    "MBCx",
+    "commissioning agent",
+    "commissioning authority",
+    "commissioning provider",
+    "commissioning services",
+    "commissioning consultant",
+    "commissioning coordinator",
+    "independent commissioning authority",
+    "third-party commissioning",
+    "third party commissioning",
+    "Cx agent",
+    "CxA",
+    "Cx provider",
+    "CxP",
+    "Cx consultant",
+    "MEP commissioning",
+    "mechanical commissioning",
+    "electrical commissioning",
+    "HVAC commissioning",
+    "building systems commissioning",
+    "systems verification",
+    "functional performance testing",
+    "functional testing",
+    "functional test",
+    "FPT",
+    "TAB and commissioning",
+    "commissioning plan",
+    "commissioning report",
+    "commissioning documentation",
+    "commissioning specifications",
+    "systems manual",
+    "seasonal testing",
+    "deferred testing",
+    "warranty review",
+    "training verification",
+    "owner's project requirements",
+    "owners project requirements",
+    "OPR",
+    "basis of design",
+    "BOD",
+    "019113",
+    "01 9113",
+    "01 91 13",
+
+    # Building enclosure / envelope commissioning
+    "building enclosure commissioning",
+    "building envelope commissioning",
+    "enclosure commissioning",
+    "envelope commissioning",
+    "building enclosure commissioning agent",
+    "building enclosure commissioning provider",
+    "building enclosure consultant",
+    "building envelope consultant",
+    "BECx",
+    "BECxA",
+    "BECxP",
+    "019119",
+    "01 9119",
+    "01 91 19",
+]
+
+COMMISSIONING_KEYWORDS_SECONDARY = [
+    # Building enclosure testing
+    "building enclosure testing",
+    "building envelope testing",
+    "air barrier testing",
+    "whole building air leakage testing",
+    "whole building airtightness testing",
+    "blower door testing",
+    "building leakage testing",
+    "water penetration testing",
+    "roof testing",
+    "roof moisture survey",
+    "facade testing",
+    "curtain wall testing",
+    "infrared thermography",
+    "ASTM E779",
+    "ASTM E1827",
+    "ASTM E3158",
+    "ASTM E1105",
+    "ASTM E783",
+    "ASTM E1186",
+    "AAMA 501.2",
+    "AAMA 503",
+    "AAMA 502",
+
+    # Related building performance / verification terms
+    "building performance",
+    "high performance building",
+    "building diagnostics",
+    "building science",
+    "quality assurance",
+    "quality control",
+    "QA/QC",
+    "verification services",
+    "building assessment",
+    "LEED commissioning",
+    "LEED enhanced commissioning",
+    "LEED v4",
+    "LEED version 4.0",
+    "LEED v4.1",
+    "LEED version 4.1",
+    "LEED v5",
+    "LEED version 5.0",
+    "HVAC verification",
+    "controls verification",
+    "BAS verification",
+    "building automation system",
+    "controls integration",
+    "systems startup",
+    "systems acceptance testing",
+    "design review",
+    "submittal review",
+    "prefunctional checklist",
+    "pre-functional checklist",
+    "PFC",
+    "post occupancy review",
+    "post-occupancy review",
+    "building tune-up",
+    "building tune up",
+    "controls functional testing",
+    "MEP systems",
+    "HVAC controls",
+    "direct digital controls",
+    "DDC",
+    "building automation controls",
+
+    # Envelope consultant / investigation terms
+    "air barrier consultant",
+    "exterior enclosure",
+    "exterior wall testing",
+    "fenestration testing",
+    "roofing consultant",
+    "roofing inspection",
+    "waterproofing consultant",
+    "moisture investigation",
+    "leak investigation",
+]
+
+COMMISSIONING_KEYWORDS_TERTIARY = [
+    # Broader project indicators -- active in broad mode only
+    "new construction",
+    "renovation",
+    "capital improvement",
+    "modernization",
+    "infrastructure improvement",
+    "facility upgrade",
+    "energy upgrade",
+    "HVAC replacement",
+    "chiller replacement",
+    "boiler replacement",
+    "controls upgrade",
+    "2021 IECC",
+    "2021 International Energy Conservation Code",
+    "2024 IECC",
+    "2024 International Energy Conservation Code",
+    "laboratory",
+    "research facility",
+    "medical center",
+    "healthcare facility",
+    "higher education",
+    "courthouse",
+    "correctional facility",
+    "federal building",
+    "owner's representative",
+    "technical services",
+    "engineering services",
+    "architectural and engineering services",
+    "A/E services",
+    "energy performance",
+    "energy audit",
+    "energy conservation",
+    "decarbonization",
+    "electrification",
+    "net zero",
+    "carbon reduction",
+    "energy optimization",
+
+    # Kept tertiary because these can be useful but noisy
+    "TAB",
+    "test and balance",
+    "testing and balancing",
+    "testing adjusting and balancing",
+]
+
 # Tuning guide:
 #   Getting too many unrelated results? Raise MIN_SCORE_INCLUDE_BROAD.
 #   Missing real EM&V RFPs?           Lower MIN_SCORE_INCLUDE_BROAD or promote
@@ -559,6 +769,104 @@ EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
 DASHBOARD_OUTPUT_PATH = "docs/index.html"
 DASHBOARD_MAX_DISPLAY = 150
+
+
+# ---------------------------------------------------------------------------
+# MONITOR TYPES
+#
+# The same codebase supports multiple monitor types. Supabase tables are scoped
+# by monitor_type, and dashboard output paths are separated by monitor type.
+# ---------------------------------------------------------------------------
+
+VALID_MONITOR_TYPES = ["emv", "commissioning"]
+
+MONITOR_LABELS = {
+    "emv": "EM&V / Evaluation",
+    "commissioning": "Commissioning / RCx",
+}
+
+DASHBOARD_OUTPUT_PATHS = {
+    "emv": "docs/emv.html",
+    "commissioning": "docs/commissioning.html",
+}
+
+DASHBOARD_LANDING_PATH = "docs/index.html"
+
+DASHBOARD_URLS = {
+    "emv": "https://cx-associates.github.io/rfp-monitor/emv.html",
+    "commissioning": "https://cx-associates.github.io/rfp-monitor/commissioning.html",
+}
+
+EMAIL_SUBJECT_PREFIX_BY_MONITOR = {
+    "emv": EMAIL_SUBJECT_PREFIX,
+    "commissioning": "[CxA Commissioning RFP Monitor]",
+}
+
+MIN_SCORE_INCLUDE_BROAD_BY_MONITOR = {
+    "emv": MIN_SCORE_INCLUDE_BROAD,
+    # Require more than a single tertiary project-indicator match for commissioning.
+    "commissioning": 5,
+}
+
+MIN_SCORE_INCLUDE_MEDIUM_BY_MONITOR = {
+    "emv": MIN_SCORE_INCLUDE_MEDIUM,
+    "commissioning": 5,
+}
+
+KEYWORD_TIERS_BY_MONITOR = {
+    "emv": {
+        "primary": KEYWORDS_PRIMARY,
+        "secondary": KEYWORDS_SECONDARY,
+        "tertiary": KEYWORDS_TERTIARY,
+    },
+    "commissioning": {
+        "primary": COMMISSIONING_KEYWORDS_PRIMARY,
+        "secondary": COMMISSIONING_KEYWORDS_SECONDARY,
+        "tertiary": COMMISSIONING_KEYWORDS_TERTIARY,
+    },
+}
+
+
+def normalize_monitor_type(monitor_type: str = None) -> str:
+    value = (monitor_type or "emv").strip().lower()
+    if value not in VALID_MONITOR_TYPES:
+        raise ValueError(
+            f"Unsupported monitor_type={monitor_type!r}. "
+            f"Expected one of: {', '.join(VALID_MONITOR_TYPES)}"
+        )
+    return value
+
+
+def get_monitor_label(monitor_type: str = None) -> str:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return MONITOR_LABELS[monitor_type]
+
+
+def get_dashboard_output_path(monitor_type: str = None) -> str:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return DASHBOARD_OUTPUT_PATHS[monitor_type]
+
+
+def get_dashboard_url(monitor_type: str = None) -> str:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return DASHBOARD_URLS[monitor_type]
+
+
+def get_email_subject_prefix(monitor_type: str = None) -> str:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return EMAIL_SUBJECT_PREFIX_BY_MONITOR[monitor_type]
+
+
+def get_keyword_tiers(monitor_type: str = None) -> dict:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return KEYWORD_TIERS_BY_MONITOR[monitor_type]
+
+
+def get_min_score_for_mode(mode: str, monitor_type: str = None) -> int:
+    monitor_type = normalize_monitor_type(monitor_type)
+    if mode == "broad":
+        return MIN_SCORE_INCLUDE_BROAD_BY_MONITOR[monitor_type]
+    return MIN_SCORE_INCLUDE_MEDIUM_BY_MONITOR[monitor_type]
 
 # ---------------------------------------------------------------------------
 # HTTP REQUEST SETTINGS

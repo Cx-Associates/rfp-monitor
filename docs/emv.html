@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>CxA RFP Monitor - EM&V / Evaluation</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+         background:#f0f2f5;color:#333;}
+    .hdr{background:#1a1a2e;color:#fff;padding:18px 28px;}
+    .hdr h1{font-size:22px;font-weight:700;}
+    .hdr p{font-size:13px;opacity:.7;margin-top:4px;}
+    .mode-badge{display:inline-block;background:#e65100;color:#fff;font-size:11px;
+                 font-weight:700;padding:2px 8px;border-radius:3px;margin-left:10px;
+                 vertical-align:middle;}
+    .stats{display:flex;gap:14px;padding:18px 28px;flex-wrap:wrap;}
+    .stat{background:#fff;border-radius:8px;padding:14px 20px;min-width:120px;
+           box-shadow:0 1px 3px rgba(0,0,0,.1);}
+    .stat .n{font-size:30px;font-weight:700;color:#1a1a2e;}
+    .stat .l{font-size:11px;color:#888;margin-top:2px;}
+    .filters{padding:0 28px 14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+    .filters select,.filters input{padding:6px 10px;border:1px solid #ddd;border-radius:5px;
+                                    font-size:13px;background:#fff;}
+    .filters button{padding:6px 12px;border:1px solid #ddd;border-radius:5px;
+                     background:#fff;cursor:pointer;font-size:13px;}
+    .tbl-wrap{padding:0 28px 28px;overflow-x:auto;}
+    table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;
+           box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px;}
+    th{background:#1a1a2e;color:#fff;padding:9px 11px;text-align:left;font-size:12px;
+        font-weight:600;white-space:nowrap;}
+    td{padding:9px 11px;border-bottom:1px solid #f0f0f0;}
+    tr:last-child td{border-bottom:none;}
+    tr:hover td{background:#f8f8ff;}
+    .row-new td{background:#f0fff4;}
+    .badge-new{background:#2e7d32;color:#fff;font-size:10px;font-weight:700;
+                padding:1px 5px;border-radius:3px;}
+    .conf-high{color:#2e7d32;font-weight:700;}
+    .conf-med{color:#e65100;font-weight:600;}
+    .conf-low{color:#888;}
+    .days-urgent{color:#c62828;font-weight:700;}
+    .manual-review{margin:0 28px 28px;background:#fff;border-radius:8px;
+                    box-shadow:0 1px 3px rgba(0,0,0,.1);padding:12px 16px;}
+    .manual-review summary{cursor:pointer;font-weight:700;color:#1a1a2e;}
+    .manual-review p{font-size:12px;color:#777;margin:8px 0 10px 0;}
+    .manual-table{padding:8px 0 0;}
+    .manual-table table{box-shadow:none;border:1px solid #eee;}
+    .remove-cell{text-align:center;width:38px;}
+    .remove-btn{border:0;background:#eee;color:#555;border-radius:50%;
+                 width:24px;height:24px;line-height:20px;cursor:pointer;
+                 font-weight:700;font-size:16px;}
+    .remove-btn:hover{background:#d32f2f;color:#fff;}
+    .remove-btn:disabled{opacity:.6;cursor:wait;}
+    a{color:#0066cc;text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    #row-count{font-size:12px;color:#888;padding:0 28px 8px;}
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <h1>CxA RFP Monitor - EM&V / Evaluation
+      <span class="mode-badge" title="Current keyword sensitivity mode">
+        Broad mode
+      </span>
+    </h1>
+    <p>EM&V / Evaluation Opportunity Dashboard &mdash; Last updated: 2026-06-14 00:23 UTC</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">0</div><div class="l">New this run</div></div>
+    <div class="stat"><div class="n" style="color:#2e7d32">2</div>
+      <div class="l">High confidence</div></div>
+    <div class="stat"><div class="n" style="color:#e65100">2</div>
+      <div class="l">Medium confidence</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">Total active</div></div>
+    <div class="stat"><div class="n" id="manual-count">28</div><div class="l">Manual review</div></div>
+  </div>
+
+  <div class="filters">
+    <input type="text" id="f-text" placeholder="Search titles..." oninput="applyFilters()">
+    <select id="f-conf" onchange="applyFilters()">
+      <option value="">All confidence</option>
+      <option value="High">High</option>
+      <option value="Medium">Medium</option>
+      <option value="Low">Low</option>
+    </select>
+    <select id="f-src" onchange="applyFilters()">
+      <option value="">All sources</option>
+      <option value="AESP Active RFPs">AESP Active RFPs</option><option value="Energy Trust of Oregon Contracting Opportunities">Energy Trust of Oregon Contracting Opportunities</option><option value="PG&amp;E Energy Efficiency Solicitations">PG&amp;E Energy Efficiency Solicitations</option>
+    </select>
+    <select id="f-state" onchange="applyFilters()">
+      <option value="">All states</option>
+      <option value="CA">CA</option><option value="CT">CT</option><option value="HI">HI</option><option value="OR">OR</option>
+    </select>
+    <button onclick="resetFilters()">Reset</button>
+    <label style="font-size:12px;color:#888;display:flex;align-items:center;gap:4px;">
+      <input type="checkbox" id="f-new" onchange="applyFilters()"> New only
+    </label>
+  </div>
+  <div id="row-count"></div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
+          <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
+          <th>Keywords</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr data-conf="High" data-source="AESP Active RFPs" data-state="HI" data-title="request for proposal: state of hawaii public utilities commission: independent evaluation, measurement, and verification contractor" data-title-full="Request for Proposal: State of Hawaii Public Utilities Commission: Independent Evaluation, Measurement, and Verification Contractor" data-unique-key="AESP Active RFPs::https://aesp.org/wp-content/uploads/2026/05/RFP_Dept.-of-commerce-and-consumer-affairs.pdf" class=""><td><a href="https://aesp.org/wp-content/uploads/2026/05/RFP_Dept.-of-commerce-and-consumer-affairs.pdf" target="_blank">Request for Proposal: State of Hawaii Public Utilities Commission: Independent Evalua...</a></td><td>AESP Active RFPs</td><td>AESP</td><td>HI</td><td><span class="conf-high">High</span></td><td>47</td><td>2026-07-10</td><td>26d</td><td style="font-size:11px;color:#666;">evaluation, measurement and verification, evaluation, measurement, and verification, EM&amp;V, measurement and verification</td></tr>
+<tr data-conf="High" data-source="Energy Trust of Oregon Contracting Opportunities" data-state="OR" data-title="rfq—planning, evaluation and research tasks" data-title-full="RFQ—Planning, Evaluation and Research Tasks" data-unique-key="Energy Trust of Oregon Contracting Opportunities::RFQ—Planning, Evaluation and Research Tasks::2024-12-27" class=""><td><a href="https://www.energytrust.org/wp-content/uploads/2023/02/FINAL-Planning_Eval_Research-RFQ-2025-2026.pdf" target="_blank">RFQ—Planning, Evaluation and Research Tasks</a></td><td>Energy Trust of Oregon Contracting Opportunities</td><td>Energy Trust of Oregon</td><td>OR</td><td><span class="conf-high">High</span></td><td>20</td><td>2026-12-31</td><td>200d</td><td style="font-size:11px;color:#666;">evaluation and research, planning, evaluation and research</td></tr>
+<tr data-conf="Medium" data-source="AESP Active RFPs" data-state="CT" data-title="request for proposal: energy efficiency board evaluation process consultant" data-title-full="Request for Proposal: Energy Efficiency Board Evaluation Process Consultant" data-unique-key="AESP Active RFPs::https://aesp.org/wp-content/uploads/2026/06/Eversource-RFP.pdf" class=""><td><a href="https://aesp.org/wp-content/uploads/2026/06/Eversource-RFP.pdf" target="_blank">Request for Proposal: Energy Efficiency Board Evaluation Process Consultant</a></td><td>AESP Active RFPs</td><td>AESP</td><td>CT</td><td><span class="conf-med">Medium</span></td><td>7</td><td>2026-07-17</td><td>33d</td><td style="font-size:11px;color:#666;">energy efficiency</td></tr>
+<tr data-conf="Medium" data-source="PG&amp;E Energy Efficiency Solicitations" data-state="CA" data-title="statewide we&amp;t career &amp; workforce readiness program" data-title-full="Statewide WE&amp;T Career &amp; Workforce Readiness program" data-unique-key="PG&amp;E Energy Efficiency Solicitations::Statewide WE&amp;T Career &amp; Workforce Readiness program::https://www.pge.com/en/about/doing-business-with-pge/solicitations.html" class=""><td><a href="https://www.pge.com/en/about/doing-business-with-pge/solicitations.html" target="_blank">Statewide WE&amp;T Career &amp; Workforce Readiness program</a></td><td>PG&amp;E Energy Efficiency Solicitations</td><td>Pacific Gas and Electric Company</td><td>CA</td><td><span class="conf-med">Medium</span></td><td>2</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;">energy efficiency</td></tr>
+
+      </tbody>
+    </table>
+  </div>
+
+  <details class="manual-review">
+    <summary>Manual review candidates (<span id="manual-summary-count">28</span> below threshold)</summary>
+    <p>
+      These items were scraped and scored but did not meet the current inclusion
+      threshold for the main dashboard/email digest. Review periodically for
+      missed opportunities or keyword-tuning ideas.
+    </p>
+    <div class="tbl-wrap manual-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
+            <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
+            <th>Keywords</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="manual-review-body">
+          <tr data-conf="Below threshold" data-source="AESP Active RFPs" data-state="ME" data-title="request for proposal: public level 2 electric vehicle chargers" data-title-full="Request for Proposal: Public Level 2 Electric Vehicle Chargers" data-unique-key="AESP Active RFPs::https://www.efficiencymaine.com/rfp-em-008-2026/" class=""><td><a href="https://www.efficiencymaine.com/rfp-em-008-2026/" target="_blank">Request for Proposal: Public Level 2 Electric Vehicle Chargers</a></td><td>AESP Active RFPs</td><td>AESP</td><td>ME</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>2027-03-03</td><td>262d</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Cape Light Compact RFPs" data-state="MA" data-title="rfp for 2028-2030 eep plan support" data-title-full="RFP for 2028-2030 EEP Plan Support" data-unique-key="Cape Light Compact RFPs::https://www.capelightcompact.org/wp-content/uploads/2026/05/RFP-for-2028-2030-EEP-Plan-Support.pdf" class=""><td><a href="https://www.capelightcompact.org/wp-content/uploads/2026/05/RFP-for-2028-2030-EEP-Plan-Support.pdf" target="_blank">RFP for 2028-2030 EEP Plan Support</a></td><td>Cape Light Compact RFPs</td><td>Cape Light Compact</td><td>MA</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="DOE EERE Funding Opportunities" data-state="" data-title="cmei funding opportunities page" data-title-full="CMEI Funding Opportunities page" data-unique-key="DOE EERE Funding Opportunities::https://energy.gov/eere/funding/eere-funding-opportunities" class=""><td><a href="https://energy.gov/eere/funding/eere-funding-opportunities" target="_blank">CMEI Funding Opportunities page</a></td><td>DOE EERE Funding Opportunities</td><td>DOE EERE Funding Opportunities</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="DOE EERE Funding Opportunities" data-state="" data-title="energy department issues rfp to advance president trump’s 172-million-barrel strategic petroleum reserve exchange" data-title-full="Energy Department Issues RFP to Advance President Trump’s 172-Million-Barrel Strategic Petroleum Reserve Exchange" data-unique-key="DOE EERE Funding Opportunities::https://www.energy.gov/hgeo/opr/articles/energy-department-issues-rfp-advance-president-trumps-172-million-barrel" class=""><td><a href="https://www.energy.gov/hgeo/opr/articles/energy-department-issues-rfp-advance-president-trumps-172-million-barrel" target="_blank">Energy Department Issues RFP to Advance President Trump’s 172-Million-Barrel Strategi...</a></td><td>DOE EERE Funding Opportunities</td><td>DOE EERE Funding Opportunities</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Energy Trust of Oregon Contracting Opportunities" data-state="OR" data-title="rfq—language translation and interpretation services" data-title-full="RFQ—Language Translation and Interpretation Services" data-unique-key="Energy Trust of Oregon Contracting Opportunities::RFQ—Language Translation and Interpretation Services::2026-06-11" class=""><td><a href="https://www.energytrust.org/wp-content/uploads/2026/06/Language-Services-RFQ-Final-2026.pdf" target="_blank">RFQ—Language Translation and Interpretation Services</a></td><td>Energy Trust of Oregon Contracting Opportunities</td><td>Energy Trust of Oregon</td><td>OR</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Energy Trust of Oregon Contracting Opportunities" data-state="OR" data-title="rfq—renewable energy consultants (hydropower, biopower, microgrid)" data-title-full="RFQ—Renewable Energy Consultants (Hydropower, Biopower, Microgrid)" data-unique-key="Energy Trust of Oregon Contracting Opportunities::RFQ—Renewable Energy Consultants (Hydropower, Biopower, Microgrid)::2026-05-26" class=""><td><a href="https://www.energytrust.org/wp-content/uploads/2026/05/RFQ_RE-consultants_2026.pdf" target="_blank">RFQ—Renewable Energy Consultants (Hydropower, Biopower, Microgrid)</a></td><td>Energy Trust of Oregon Contracting Opportunities</td><td>Energy Trust of Oregon</td><td>OR</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Energy Trust of Oregon Contracting Opportunities" data-state="OR" data-title="rfq—writers pool" data-title-full="RFQ—Writers Pool" data-unique-key="Energy Trust of Oregon Contracting Opportunities::RFQ—Writers Pool::2024-01-23" class=""><td><a href="https://www.energytrust.org/about/work-with-us/how-to-work-with-energy-trust/contracting-opportunities/request-for-qualifications-rfq-writing-professionals-pool/" target="_blank">RFQ—Writers Pool</a></td><td>Energy Trust of Oregon Contracting Opportunities</td><td>Energy Trust of Oregon</td><td>OR</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Entergy RFPs" data-state="Multi" data-title="2026 eml renewables and storage rfp" data-title-full="2026 EML Renewables and Storage RFP" data-unique-key="Entergy RFPs::2026 EML Renewables and Storage RFP::https://rfp.entergy.com/ENTRFP/SEND/2026EMLRenewablesandStorageRFP/index.htm" class=""><td><a href="https://rfp.entergy.com/ENTRFP/SEND/2026EMLRenewablesandStorageRFP/index.htm" target="_blank">2026 EML Renewables and Storage RFP</a></td><td>Entergy RFPs</td><td>Entergy</td><td>Multi</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Entergy RFPs" data-state="Multi" data-title="2026 eti ccct rfp" data-title-full="2026 ETI CCCT RFP" data-unique-key="Entergy RFPs::2026 ETI CCCT RFP::https://rfp.entergy.com/ENTRFP/SEND/2026eticcctrfp/index.htm" class=""><td><a href="https://rfp.entergy.com/ENTRFP/SEND/2026eticcctrfp/index.htm" target="_blank">2026 ETI CCCT RFP</a></td><td>Entergy RFPs</td><td>Entergy</td><td>Multi</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="2022 rfp participant instructions" data-title-full="2022 RFP Participant Instructions" data-unique-key="Green Mountain Power::https://greenmountainpower.com/wp-content/uploads/2022/12/GMP-2022-Low-income-Solar-RFP-Instructions.pdf" class=""><td><a href="https://greenmountainpower.com/wp-content/uploads/2022/12/GMP-2022-Low-income-Solar-RFP-Instructions.pdf" target="_blank">2022 RFP Participant Instructions</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="distributed vermont renewable rfp overview" data-title-full="Distributed Vermont Renewable RFP Overview" data-unique-key="Green Mountain Power::https://static.greenmountainpower.com/regulatory/Distributed-Renewable-RFP-overview.pdf" class=""><td><a href="https://static.greenmountainpower.com/regulatory/Distributed-Renewable-RFP-overview.pdf" target="_blank">Distributed Vermont Renewable RFP Overview</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="distributed vermont renewable rfp participant instructions" data-title-full="Distributed Vermont Renewable RFP Participant Instructions" data-unique-key="Green Mountain Power::https://static.greenmountainpower.com/regulatory/GMP-2025-VT-Renewable-RFP-Instructions.pdf" class=""><td><a href="https://static.greenmountainpower.com/regulatory/GMP-2025-VT-Renewable-RFP-Instructions.pdf" target="_blank">Distributed Vermont Renewable RFP Participant Instructions</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="grafton rfp final" data-title-full="Grafton RFP final" data-unique-key="Green Mountain Power::https://greenmountainpower.com/wp-content/uploads/2021/12/Grafton-RFP-final-draft-2.pdf" class=""><td><a href="https://greenmountainpower.com/wp-content/uploads/2021/12/Grafton-RFP-final-draft-2.pdf" target="_blank">Grafton RFP final</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="low income solar rfp overview" data-title-full="Low Income Solar RFP overview" data-unique-key="Green Mountain Power::https://greenmountainpower.com/wp-content/uploads/2022/12/Low-income-Solar-RFP-overview-final-for-posting.pdf" class=""><td><a href="https://greenmountainpower.com/wp-content/uploads/2022/12/Low-income-Solar-RFP-overview-final-for-posting.pdf" target="_blank">Low Income Solar RFP overview</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="resilient neighborhood rfp" data-title-full="Resilient Neighborhood RFP" data-unique-key="Green Mountain Power::https://greenmountainpower.com/wp-content/uploads/2023/05/Resilient-Neighborhood-RFP.pdf" class=""><td><a href="https://greenmountainpower.com/wp-content/uploads/2023/05/Resilient-Neighborhood-RFP.pdf" target="_blank">Resilient Neighborhood RFP</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Green Mountain Power" data-state="" data-title="vermont community evse grant program rfp" data-title-full="Vermont Community EVSE Grant Program RFP" data-unique-key="Green Mountain Power::https://greenmountainpower.com/wp-content/uploads/2023/06/VT-Community-EVSE-RFP-6.20.23.pdf" class=""><td><a href="https://greenmountainpower.com/wp-content/uploads/2023/06/VT-Community-EVSE-RFP-6.20.23.pdf" target="_blank">Vermont Community EVSE Grant Program RFP</a></td><td>Green Mountain Power</td><td>Green Mountain Power</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="ISO-NE Solicitations" data-state="" data-title="longer-term transmission studies" data-title-full="Longer-Term Transmission Studies" data-unique-key="ISO-NE Solicitations::https://www.iso-ne.com/system-planning/transmission-planning/longer-term-transmission-studies" class=""><td><a href="https://www.iso-ne.com/system-planning/transmission-planning/longer-term-transmission-studies" target="_blank">Longer-Term Transmission Studies</a></td><td>ISO-NE Solicitations</td><td>ISO-NE Solicitations</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="ISO-NE Solicitations" data-state="" data-title="public policy transmission" data-title-full="Public Policy Transmission" data-unique-key="ISO-NE Solicitations::https://www.iso-ne.com/system-planning/transmission-planning/public-policy-transmission/" class=""><td><a href="https://www.iso-ne.com/system-planning/transmission-planning/public-policy-transmission/" target="_blank">Public Policy Transmission</a></td><td>ISO-NE Solicitations</td><td>ISO-NE Solicitations</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="ISO-NE Solicitations" data-state="" data-title="qtps application and annual certification" data-title-full="QTPS Application and Annual Certification" data-unique-key="ISO-NE Solicitations::https://www.iso-ne.com/participate/applications-status-changes/qtps-application-annual-certification" class=""><td><a href="https://www.iso-ne.com/participate/applications-status-changes/qtps-application-annual-certification" target="_blank">QTPS Application and Annual Certification</a></td><td>ISO-NE Solicitations</td><td>ISO-NE Solicitations</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="ISO-NE Solicitations" data-state="" data-title="system efficiency transmission upgrades" data-title-full="System Efficiency Transmission Upgrades" data-unique-key="ISO-NE Solicitations::https://www.iso-ne.com/system-planning/transmission-planning/setu" class=""><td><a href="https://www.iso-ne.com/system-planning/transmission-planning/setu" target="_blank">System Efficiency Transmission Upgrades</a></td><td>ISO-NE Solicitations</td><td>ISO-NE Solicitations</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Mass Save / EEAC" data-state="" data-title="clean energy pathways rfp" data-title-full="Clean Energy Pathways RFP" data-unique-key="Mass Save / EEAC::https://www.masssave.com/-/media/Files/PDFs/RFPs/Mass-Save-Clean-Energy-Pathways-RFP.pdf" class=""><td><a href="https://www.masssave.com/-/media/Files/PDFs/RFPs/Mass-Save-Clean-Energy-Pathways-RFP.pdf" target="_blank">Clean Energy Pathways RFP</a></td><td>Mass Save / EEAC</td><td>Mass Save / EEAC</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="Mass Save / EEAC" data-state="" data-title="mass codes and standards initiative rfp" data-title-full="Mass Codes and Standards Initiative RFP" data-unique-key="Mass Save / EEAC::https://www.masssave.com/-/media/Files/PDFs/RFPs/Mass-Codes-and-Standards-Initiative-RFP.pdf" class=""><td><a href="https://www.masssave.com/-/media/Files/PDFs/RFPs/Mass-Codes-and-Standards-Initiative-RFP.pdf" target="_blank">Mass Codes and Standards Initiative RFP</a></td><td>Mass Save / EEAC</td><td>Mass Save / EEAC</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="NASEO RFP Board" data-state="" data-title="check back soon for updates" data-title-full="Check back soon for updates" data-unique-key="NASEO RFP Board::https://www.naseo.org/rfps" class=""><td><a href="https://www.naseo.org/rfps" target="_blank">Check back soon for updates</a></td><td>NASEO RFP Board</td><td>NASEO / State Energy Office</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="NYSERDA" data-state="" data-title="large-scale renewable solicitations" data-title-full="Large-Scale Renewable Solicitations" data-unique-key="NYSERDA::https://www.nyserda.ny.gov/All-Programs/Large-Scale-Renewables/RES-Tier-One-Eligibility/Solicitations-for-Long-term-Contracts" class=""><td><a href="https://www.nyserda.ny.gov/All-Programs/Large-Scale-Renewables/RES-Tier-One-Eligibility/Solicitations-for-Long-term-Contracts" target="_blank">Large-Scale Renewable Solicitations</a></td><td>NYSERDA</td><td>NYSERDA</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="NYSERDA" data-state="" data-title="rps program purchase of renewable energy attributes" data-title-full="RPS Program Purchase of Renewable Energy Attributes" data-unique-key="NYSERDA::https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP1037summary.pdf" class=""><td><a href="https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP1037summary.pdf" target="_blank">RPS Program Purchase of Renewable Energy Attributes</a></td><td>NYSERDA</td><td>NYSERDA</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="NYSERDA" data-state="" data-title="rps program purchase of renewable energy attributes (rfp 1168)" data-title-full="RPS Program Purchase of Renewable Energy Attributes (RFP 1168)" data-unique-key="NYSERDA::https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP1168summary.pdf" class=""><td><a href="https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP1168summary.pdf" target="_blank">RPS Program Purchase of Renewable Energy Attributes (RFP 1168)</a></td><td>NYSERDA</td><td>NYSERDA</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="NYSERDA" data-state="" data-title="rps program purchase of renewable energy attributes (rfp 916)" data-title-full="RPS Program Purchase of Renewable Energy Attributes (RFP 916)" data-unique-key="NYSERDA::https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP916summary.pdf" class=""><td><a href="https://www.nyserda.ny.gov/-/media/Project/Nyserda/Files/EDPPP/Energy-and-Environmental-Markets/RPS/Main-Tier-Solicitation/RFP916summary.pdf" target="_blank">RPS Program Purchase of Renewable Energy Attributes (RFP 916)</a></td><td>NYSERDA</td><td>NYSERDA</td><td>--</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+<tr data-conf="Below threshold" data-source="PG&amp;E Energy Efficiency Solicitations" data-state="CA" data-title="statewide heating, ventilation, and air conditioning (hvac) program" data-title-full="Statewide heating, ventilation, and air conditioning (HVAC) program" data-unique-key="PG&amp;E Energy Efficiency Solicitations::Statewide heating, ventilation, and air conditioning (HVAC) program::https://www.poweradvocate.com/pR.do?okey=235653&amp;pubEvent=true" class=""><td><a href="https://www.poweradvocate.com/pR.do?okey=235653&amp;pubEvent=true" target="_blank">Statewide heating, ventilation, and air conditioning (HVAC) program</a></td><td>PG&amp;E Energy Efficiency Solicitations</td><td>Pacific Gas and Electric Company</td><td>CA</td><td><span class="conf-low">Below threshold</span></td><td>0</td><td>--</td><td>--</td><td style="font-size:11px;color:#666;"></td><td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td></tr>
+
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <script>
+    function applyFilters() {
+      const text  = document.getElementById('f-text').value.toLowerCase();
+      const conf  = document.getElementById('f-conf').value;
+      const src   = document.getElementById('f-src').value;
+      const state = document.getElementById('f-state').value;
+      const newOnly = document.getElementById('f-new').checked;
+      const rows  = document.querySelectorAll('#tbody tr');
+      let visible = 0;
+      rows.forEach(r => {
+        const titleMatch  = !text  || (r.dataset.title  || '').includes(text);
+        const confMatch   = !conf  || r.dataset.conf  === conf;
+        const srcMatch    = !src   || r.dataset.source === src;
+        const stateMatch  = !state || r.dataset.state  === state;
+        const newMatch    = !newOnly || r.classList.contains('row-new');
+        const show = titleMatch && confMatch && srcMatch && stateMatch && newMatch;
+        r.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      document.getElementById('row-count').textContent =
+        `Showing ${visible} of ${rows.length} opportunities`;
+    }
+    function resetFilters() {
+      ['f-text','f-conf','f-src','f-state'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el.tagName === 'INPUT') el.value = '';
+        else el.selectedIndex = 0;
+      });
+      document.getElementById('f-new').checked = false;
+      applyFilters();
+    }
+    async function suppressManualReview(button) {
+      const row = button.closest('tr');
+      if (!row) return;
+
+      let token = localStorage.getItem('rfpAdminToken') || '';
+      if (!token) {
+        token = prompt('Enter dashboard removal token');
+        if (!token) return;
+        localStorage.setItem('rfpAdminToken', token);
+      }
+
+      const payload = {
+        monitor_type: 'emv',
+        unique_key: row.dataset.uniqueKey || '',
+        source: row.dataset.source || '',
+        title: row.dataset.titleFull || row.dataset.title || '',
+        reason: 'manual_dashboard_dismissal',
+        suppressed_by: 'dashboard'
+      };
+
+      button.disabled = true;
+      button.textContent = '...';
+
+      try {
+        const response = await fetch(
+          'https://udxcbyoohgzdkjxytxzg.functions.supabase.co/suppress-manual-review',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-rfp-admin-token': token
+            },
+            body: JSON.stringify(payload)
+          }
+        );
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result.ok) {
+          if (response.status === 401) {
+            localStorage.removeItem('rfpAdminToken');
+            alert('Removal token was rejected. Try again with the correct token.');
+          } else {
+            alert('Could not hide item: ' + (result.error || response.status));
+          }
+          button.disabled = false;
+          button.textContent = 'x';
+          return;
+        }
+
+        row.remove();
+
+        const manualRows = document.querySelectorAll('#manual-review-body tr[data-unique-key]');
+        const manualCount = document.getElementById('manual-count');
+        const manualSummaryCount = document.getElementById('manual-summary-count');
+
+        if (manualCount) manualCount.textContent = manualRows.length;
+        if (manualSummaryCount) manualSummaryCount.textContent = manualRows.length;
+
+        if (manualRows.length === 0) {
+          document.getElementById('manual-review-body').innerHTML =
+            '<tr><td colspan="10" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+        }
+      } catch (err) {
+        alert('Could not hide item. Check network connection and try again.');
+        button.disabled = false;
+        button.textContent = 'x';
+      }
+    }
+
+    // Initialize row count on load
+    applyFilters();
+  </script>
+</body>
+</html>

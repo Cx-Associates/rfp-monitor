@@ -41,6 +41,7 @@ KNOWN FAILURE POINTS:
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 from typing import List
@@ -75,6 +76,16 @@ def parse_args() -> argparse.Namespace:
             "'broad' = all three keyword tiers active (wider net, more results). "
             "'medium' = primary + secondary only (tighter, fewer results). "
             "Defaults to the value of KEYWORD_MODE in config.py."
+        ),
+    )
+    p.add_argument(
+        "--monitor-type",
+        choices=["emv", "commissioning"],
+        default=None,
+        help=(
+            "Monitor type. 'emv' uses EM&V/evaluation keywords. "
+            "'commissioning' uses commissioning/RCx/BECx keywords. "
+            "Defaults to MONITOR_TYPE environment variable or 'emv'."
         ),
     )
     p.add_argument(
@@ -194,13 +205,19 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Apply mode override if provided on command line
+    # Apply mode and monitor-type overrides if provided on command line
     import config
     mode = args.mode or config.KEYWORD_MODE
+    monitor_type = config.normalize_monitor_type(
+        args.monitor_type or os.environ.get("MONITOR_TYPE") or "emv"
+    )
+    os.environ["MONITOR_TYPE"] = monitor_type
+    monitor_label = config.get_monitor_label(monitor_type)
 
     logger.info("=" * 55)
     logger.info("CxA RFP Monitor -- Starting run")
     logger.info(f"  Time:      {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    logger.info(f"  Monitor:   {monitor_label} ({monitor_type})")
     logger.info(f"  Mode:      {mode} keyword sensitivity")
     logger.info(f"  Run type:  {'DRY RUN' if args.dry_run else 'LIVE'}")
     logger.info(f"  Sources:   {args.sources}")
@@ -232,7 +249,7 @@ def main():
         )
         if not args.dry_run:
             from delivery import generate_dashboard
-            generate_dashboard([], [], mode=mode)
+            generate_dashboard([], [], mode=mode, monitor_type=monitor_type)
         sys.exit(0)
 
     # -------------------------------------------------------------------------
@@ -244,7 +261,11 @@ def main():
     from scorer import score_split_and_sort, filter_manual_review_candidates
     from dedup import load_suppressed_manual_review_set, filter_suppressed_manual_review
 
-    scored, manual_review, all_scored = score_split_and_sort(raw_opps, mode=mode)
+    scored, manual_review, all_scored = score_split_and_sort(
+        raw_opps,
+        mode=mode,
+        monitor_type=monitor_type,
+    )
     manual_review = filter_manual_review_candidates(manual_review)
 
     suppressed_manual_review = load_suppressed_manual_review_set()
@@ -285,6 +306,7 @@ def main():
                 dashboard_opps,
                 mode=mode,
                 manual_review=manual_review,
+                monitor_type=monitor_type,
             )
         sys.exit(0)
 
@@ -327,12 +349,13 @@ def main():
     # -------------------------------------------------------------------------
     from delivery import send_email_digest, generate_dashboard
 
-    email_ok    = send_email_digest(new_opps, mode=mode)
+    email_ok    = send_email_digest(new_opps, mode=mode, monitor_type=monitor_type)
     dashboard_ok = generate_dashboard(
         new_opps,
         dashboard_opps,
         mode=mode,
         manual_review=manual_review,
+        monitor_type=monitor_type,
     )
 
     logger.info(

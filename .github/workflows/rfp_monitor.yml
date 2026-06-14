@@ -13,6 +13,14 @@ on:
         options:
           - broad
           - medium
+      monitor_type:
+        description: "Monitor type (emv or commissioning)"
+        required: false
+        default: "emv"
+        type: choice
+        options:
+          - emv
+          - commissioning
       dry_run:
         description: "Dry run -- log only, no email, no state update"
         required: false
@@ -80,13 +88,14 @@ jobs:
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          MONITOR_TYPE: emv
+          MONITOR_TYPE: ${{ github.event.inputs.monitor_type || 'emv' }}
         run: |
           mkdir -p scrapers
           touch scrapers/__init__.py
 
           CMD="python main.py"
           CMD="$CMD --mode ${{ github.event.inputs.mode || 'broad' }}"
+          CMD="$CMD --monitor-type ${{ github.event.inputs.monitor_type || 'emv' }}"
           CMD="$CMD --sources ${{ github.event.inputs.sources || 'all' }}"
 
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
@@ -105,7 +114,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rfp-dashboard-preview
-          path: docs/index.html
+          path: |
+            docs/index.html
+            docs/emv.html
+            docs/commissioning.html
           if-no-files-found: warn
 
   deploy_pages:

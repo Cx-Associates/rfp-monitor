@@ -1,1 +1,41 @@
-<html><body><h1>CxA RFP Monitor</h1><p>Dashboard loading after first run...</p></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>CxA RFP Monitor</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+         background:#f0f2f5;color:#333;}
+    .hdr{background:#1a1a2e;color:#fff;padding:24px 32px;}
+    .hdr h1{font-size:24px;font-weight:700;}
+    .hdr p{font-size:13px;opacity:.75;margin-top:6px;}
+    .wrap{padding:28px 32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;}
+    .card{background:#fff;border-radius:10px;padding:22px 24px;box-shadow:0 1px 4px rgba(0,0,0,.12);}
+    .card h2{font-size:18px;color:#1a1a2e;margin-bottom:8px;}
+    .card p{font-size:13px;color:#666;line-height:1.5;margin-bottom:14px;}
+    .card a{display:inline-block;background:#0066cc;color:#fff;text-decoration:none;
+             padding:8px 14px;border-radius:5px;font-size:13px;font-weight:600;}
+    .card a:hover{background:#004f9e;}
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <h1>CxA RFP Monitor</h1>
+    <p>Landing page for internal RFP tracking dashboards &mdash; Last updated: 2026-06-14 00:23 UTC</p>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <h2>EM&amp;V / Evaluation RFPs</h2>
+      <p>Evaluation, measurement and verification, impact evaluation, savings verification, and related program evaluation opportunities.</p>
+      <a href="emv.html">Open EM&amp;V Dashboard</a>
+    </div>
+    <div class="card">
+      <h2>Commissioning / RCx RFPs</h2>
+      <p>Commissioning, retro-commissioning, MEP commissioning, building enclosure commissioning, testing, and related facility opportunities.</p>
+      <a href="commissioning.html">Open Commissioning Dashboard</a>
+    </div>
+  </div>
+</body>
+</html>

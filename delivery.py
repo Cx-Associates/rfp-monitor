@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 def send_email_digest(
     opportunities: List[Opportunity],
     mode: str = None,
+    monitor_type: str = None,
 ) -> bool:
     """
     Send an HTML email digest of new opportunities via SendGrid.
@@ -80,20 +81,23 @@ def send_email_digest(
 
     if mode is None:
         mode = config.KEYWORD_MODE
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    monitor_label = config.get_monitor_label(monitor_type)
+    subject_prefix = config.get_email_subject_prefix(monitor_type)
 
     run_date = datetime.utcnow().strftime("%B %d, %Y")
     count     = len(opportunities)
     high_cnt  = sum(1 for o in opportunities if o.confidence == "High")
 
     if count == 0:
-        subject  = f"{config.EMAIL_SUBJECT_PREFIX} No new EM&V RFPs this week ({run_date})"
-        html_body = _render_no_results_email(run_date)
+        subject  = f"{subject_prefix} No new RFPs this week ({run_date})"
+        html_body = _render_no_results_email(run_date, monitor_type)
     else:
         subject   = (
-            f"{config.EMAIL_SUBJECT_PREFIX} {count} new RFP{'s' if count > 1 else ''} "
+            f"{subject_prefix} {count} new RFP{'s' if count > 1 else ''} "
             f"({high_cnt} high confidence) -- {run_date}"
         )
-        html_body = _render_digest_email(opportunities, mode, run_date)
+        html_body = _render_digest_email(opportunities, mode, run_date, monitor_type)
 
     sg = sendgrid.SendGridAPIClient(api_key=api_key)
     all_ok = True
@@ -129,6 +133,7 @@ def _render_digest_email(
     opportunities: List[Opportunity],
     mode: str,
     run_date: str,
+    monitor_type: str,
 ) -> str:
     """
     Build the HTML email body for the opportunity digest.
@@ -221,6 +226,9 @@ def _render_digest_email(
     )
 
     mode_label = "Broad" if mode == "broad" else "Medium"
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    monitor_label = config.get_monitor_label(monitor_type)
+    dashboard_url = config.get_dashboard_url(monitor_type)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -229,7 +237,7 @@ def _render_digest_email(
   <div style="background:#1a1a2e;color:#fff;padding:20px 24px;border-radius:6px 6px 0 0;">
     <h1 style="margin:0;font-size:20px;font-weight:700;">CxA RFP Monitor</h1>
     <p style="margin:4px 0 0 0;font-size:13px;opacity:0.75;">
-      EM&amp;V Opportunity Digest &mdash; {run_date} &mdash; Mode: {mode_label}
+      {monitor_label} Opportunity Digest &mdash; {run_date} &mdash; Mode: {mode_label}
     </p>
   </div>
   <div style="background:#fff;padding:20px 24px;border:1px solid #ddd;border-top:none;
@@ -237,7 +245,7 @@ def _render_digest_email(
     <p style="color:#444;font-size:14px;margin-top:0;">
       Found <strong>{len(opportunities)}</strong> new opportunities
       ({sum(1 for o in opportunities if o.confidence=='High')} high confidence).
-      <a href="https://cx-associates.github.io/rfp-monitor/"
+      <a href="{dashboard_url}"
          style="color:#0066cc;">View full dashboard</a>
     </p>
     {body_sections}
@@ -245,7 +253,7 @@ def _render_digest_email(
     <p style="font-size:11px;color:#aaa;margin:0;">
       CxA RFP Monitor &mdash; Auto-generated weekly digest &mdash;
       Keyword mode: {mode_label} &mdash;
-      <a href="https://cx-associates.github.io/rfp-monitor/" style="color:#aaa;">
+      <a href="{dashboard_url}" style="color:#aaa;">
         Dashboard
       </a>
     </p>
@@ -254,16 +262,19 @@ def _render_digest_email(
 </html>"""
 
 
-def _render_no_results_email(run_date: str) -> str:
+def _render_no_results_email(run_date: str, monitor_type: str) -> str:
     """Minimal status-ping email when no new results are found."""
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    monitor_label = config.get_monitor_label(monitor_type)
+    dashboard_url = config.get_dashboard_url(monitor_type)
     return f"""<!DOCTYPE html>
 <html>
 <body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
   <h2 style="color:#1a1a2e;">CxA RFP Monitor</h2>
-  <p>No new EM&amp;V RFP opportunities found this week ({run_date}).</p>
+  <p>No new {monitor_label} RFP opportunities found this week ({run_date}).</p>
   <p>All monitored sources were checked. The monitor is running normally.</p>
   <p style="font-size:12px;color:#888;">
-    <a href="https://cx-associates.github.io/rfp-monitor/">View dashboard</a>
+    <a href="{dashboard_url}">View dashboard</a>
   </p>
 </body>
 </html>"""
@@ -278,6 +289,7 @@ def generate_dashboard(
     all_scored: List[Opportunity],
     mode: str = None,
     manual_review: Optional[List[Opportunity]] = None,
+    monitor_type: str = None,
 ) -> bool:
     """
     Write a static HTML dashboard to config.DASHBOARD_OUTPUT_PATH.
@@ -307,18 +319,22 @@ def generate_dashboard(
     """
     if mode is None:
         mode = config.KEYWORD_MODE
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    output_path = config.get_dashboard_output_path(monitor_type)
 
     try:
-        os.makedirs(os.path.dirname(config.DASHBOARD_OUTPUT_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         html = _render_dashboard_html(
             new_opportunities,
             all_scored,
             mode,
             manual_review or [],
+            monitor_type,
         )
-        with open(config.DASHBOARD_OUTPUT_PATH, "w", encoding="utf-8") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(html)
-        logger.info(f"Dashboard written to {config.DASHBOARD_OUTPUT_PATH}")
+        generate_landing_page()
+        logger.info(f"Dashboard written to {output_path}")
         return True
     except Exception as e:
         logger.error(f"Dashboard generation failed: {e}")
@@ -330,6 +346,7 @@ def _render_dashboard_html(
     all_opps: List[Opportunity],
     mode: str,
     manual_review: List[Opportunity],
+    monitor_type: str,
 ) -> str:
     """
     Build the complete HTML string for the GitHub Pages dashboard.
@@ -341,6 +358,8 @@ def _render_dashboard_html(
     (ampersands, angle brackets, quotes in titles) must be escaped to
     prevent broken attribute values and XSS. The _esc() helper handles this.
     """
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    monitor_label = config.get_monitor_label(monitor_type)
     run_time   = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     new_keys   = {o.unique_key() for o in new_opps}
     mode_label = "Broad" if mode == "broad" else "Medium"
@@ -427,7 +446,7 @@ def _render_dashboard_html(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>CxA RFP Monitor</title>
+  <title>CxA RFP Monitor - {monitor_label}</title>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0;}}
     body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
@@ -482,12 +501,12 @@ def _render_dashboard_html(
 </head>
 <body>
   <div class="hdr">
-    <h1>CxA RFP Monitor
+    <h1>CxA RFP Monitor - {monitor_label}
       <span class="mode-badge" title="Current keyword sensitivity mode">
         {mode_label} mode
       </span>
     </h1>
-    <p>EM&amp;V Opportunity Dashboard &mdash; Last updated: {run_time}</p>
+    <p>{monitor_label} Opportunity Dashboard &mdash; Last updated: {run_time}</p>
   </div>
 
   <div class="stats">
@@ -604,7 +623,7 @@ def _render_dashboard_html(
       }}
 
       const payload = {{
-        monitor_type: 'emv',
+        monitor_type: '{monitor_type}',
         unique_key: row.dataset.uniqueKey || '',
         source: row.dataset.source || '',
         title: row.dataset.titleFull || row.dataset.title || '',
@@ -668,6 +687,68 @@ def _render_dashboard_html(
 </body>
 </html>"""
 
+
+
+def generate_landing_page() -> bool:
+    """
+    Write docs/index.html as a simple landing page linking to the individual
+    monitor dashboards.
+    """
+    try:
+        os.makedirs(os.path.dirname(config.DASHBOARD_LANDING_PATH), exist_ok=True)
+        html = _render_landing_html()
+        with open(config.DASHBOARD_LANDING_PATH, "w", encoding="utf-8") as f:
+            f.write(html)
+        logger.info(f"Landing page written to {config.DASHBOARD_LANDING_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"Landing page generation failed: {e}")
+        return False
+
+
+def _render_landing_html() -> str:
+    run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>CxA RFP Monitor</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0;}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+         background:#f0f2f5;color:#333;}}
+    .hdr{{background:#1a1a2e;color:#fff;padding:24px 32px;}}
+    .hdr h1{{font-size:24px;font-weight:700;}}
+    .hdr p{{font-size:13px;opacity:.75;margin-top:6px;}}
+    .wrap{{padding:28px 32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;}}
+    .card{{background:#fff;border-radius:10px;padding:22px 24px;box-shadow:0 1px 4px rgba(0,0,0,.12);}}
+    .card h2{{font-size:18px;color:#1a1a2e;margin-bottom:8px;}}
+    .card p{{font-size:13px;color:#666;line-height:1.5;margin-bottom:14px;}}
+    .card a{{display:inline-block;background:#0066cc;color:#fff;text-decoration:none;
+             padding:8px 14px;border-radius:5px;font-size:13px;font-weight:600;}}
+    .card a:hover{{background:#004f9e;}}
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <h1>CxA RFP Monitor</h1>
+    <p>Landing page for internal RFP tracking dashboards &mdash; Last updated: {run_time}</p>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <h2>EM&amp;V / Evaluation RFPs</h2>
+      <p>Evaluation, measurement and verification, impact evaluation, savings verification, and related program evaluation opportunities.</p>
+      <a href="emv.html">Open EM&amp;V Dashboard</a>
+    </div>
+    <div class="card">
+      <h2>Commissioning / RCx RFPs</h2>
+      <p>Commissioning, retro-commissioning, MEP commissioning, building enclosure commissioning, testing, and related facility opportunities.</p>
+      <a href="commissioning.html">Open Commissioning Dashboard</a>
+    </div>
+  </div>
+</body>
+</html>"""
 
 def _esc(text: str) -> str:
     """Escape HTML special characters for safe attribute and content embedding."""

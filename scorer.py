@@ -75,7 +75,11 @@ def _keyword_in_text(keyword: str, text_normalized: str) -> bool:
     return kw_norm in text_normalized
 
 
-def score_opportunity(opportunity: Opportunity, mode: str = None) -> Opportunity:
+def score_opportunity(
+    opportunity: Opportunity,
+    mode: str = None,
+    monitor_type: str = None,
+) -> Opportunity:
     """
     Evaluate one Opportunity against the keyword lists and assign:
       - relevance_score (integer, sum of all keyword match points)
@@ -98,6 +102,8 @@ def score_opportunity(opportunity: Opportunity, mode: str = None) -> Opportunity
     """
     if mode is None:
         mode = config.KEYWORD_MODE
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    keyword_tiers = config.get_keyword_tiers(monitor_type)
 
     # Pre-normalize title and description once (used repeatedly below)
     title_norm = _normalize_for_matching(opportunity.title or "")
@@ -129,17 +135,17 @@ def score_opportunity(opportunity: Opportunity, mode: str = None) -> Opportunity
                 logger.debug(f"  DESC  +{base_pts}pts: '{kw}'")
 
     # Always check primary and secondary tiers
-    check_tier(config.KEYWORDS_PRIMARY,   config.SCORE_PRIMARY_MATCH)
-    check_tier(config.KEYWORDS_SECONDARY, config.SCORE_SECONDARY_MATCH)
+    check_tier(keyword_tiers["primary"],   config.SCORE_PRIMARY_MATCH)
+    check_tier(keyword_tiers["secondary"], config.SCORE_SECONDARY_MATCH)
 
     # Tertiary tier: broad mode only
     if mode == "broad":
-        check_tier(config.KEYWORDS_TERTIARY, config.SCORE_TERTIARY_MATCH)
+        check_tier(keyword_tiers["tertiary"], config.SCORE_TERTIARY_MATCH)
 
     # Assign confidence label
     if score >= config.MIN_SCORE_HIGH_CONFIDENCE:
         confidence = "High"
-    elif score >= _min_score_for_mode(mode):
+    elif score >= _min_score_for_mode(mode, monitor_type=monitor_type):
         confidence = "Medium"
     elif score > 0:
         confidence = "Low"
@@ -156,22 +162,19 @@ def score_opportunity(opportunity: Opportunity, mode: str = None) -> Opportunity
     return opportunity
 
 
-def _min_score_for_mode(mode: str) -> int:
+def _min_score_for_mode(mode: str, monitor_type: str = None) -> int:
     """
     Return the minimum inclusion score for the given mode.
 
     Kept as a function (rather than inline) so callers can check the
     threshold without duplicating the config lookup logic.
     """
-    return (
-        config.MIN_SCORE_INCLUDE_BROAD
-        if mode == "broad"
-        else config.MIN_SCORE_INCLUDE_MEDIUM
-    )
+    return config.get_min_score_for_mode(mode, monitor_type=monitor_type)
 
 def score_split_and_sort(
     opportunities: List[Opportunity],
     mode: Optional[str] = None,
+    monitor_type: Optional[str] = None,
 ) -> Tuple[List[Opportunity], List[Opportunity], List[Opportunity]]:
     """
     Score all opportunities and split them into:
@@ -184,15 +187,19 @@ def score_split_and_sort(
     """
     if mode is None:
         mode = config.KEYWORD_MODE
+    monitor_type = config.normalize_monitor_type(monitor_type)
 
-    min_score = _min_score_for_mode(mode)
+    min_score = _min_score_for_mode(mode, monitor_type=monitor_type)
 
     logger.info(
         f"Scoring {len(opportunities)} raw opportunities "
-        f"(mode={mode}, threshold={min_score})"
+        f"(monitor_type={monitor_type}, mode={mode}, threshold={min_score})"
     )
 
-    all_scored = [score_opportunity(opp, mode=mode) for opp in opportunities]
+    all_scored = [
+        score_opportunity(opp, mode=mode, monitor_type=monitor_type)
+        for opp in opportunities
+    ]
 
     passing = [opp for opp in all_scored if opp.relevance_score >= min_score]
     manual_review = [opp for opp in all_scored if opp.relevance_score < min_score]
@@ -311,6 +318,7 @@ def filter_manual_review_candidates(
 def filter_and_sort(
     opportunities: List[Opportunity],
     mode: Optional[str] = None,
+    monitor_type: Optional[str] = None,
 ) -> List[Opportunity]:
     """
     Score, filter, and sort opportunities using the existing scoring logic.
@@ -329,5 +337,6 @@ def filter_and_sort(
     passing, _manual_review, _all_scored = score_split_and_sort(
         opportunities,
         mode=mode,
+        monitor_type=monitor_type,
     )
     return passing
