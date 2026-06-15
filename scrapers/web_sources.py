@@ -316,6 +316,8 @@ def _scrape_by_type(
         return _scrape_veic_rfps(url, name, state)
     elif ptype == "aesp_rfps":
         return _scrape_aesp_rfps(url, name, state)
+    elif ptype == "burlington_electric_rfps":
+        return _scrape_burlington_electric_rfps(url, name, state)
     elif ptype == "neep_rfps":
         return _scrape_neep_rfps(url, name, state)
     elif ptype == "efficiency_maine_rfps":
@@ -553,28 +555,174 @@ def _scrape_ca_eprocure(url: str, name: str, state: str) -> List[Opportunity]:
     """
     Scrape California CaleProcure / DGS procurement portal.
 
-    California's portal uses ASPX with JavaScript search, making it
-    difficult to scrape directly. We target the public search results
-    page with keyword parameters appended to the URL.
+    California's CaleProcure portal is difficult to scrape directly because it
+    is ASPX/JavaScript-heavy. For energy/evaluation work, the California Energy
+    Commission contracts page is more reliable and exposes CEC solicitations.
 
-    KNOWN FAILURE POINT: California's ASPX portal may require a ViewState
-    parameter from the initial page load for search to work. If this returns
-    a blank or search-form page, fall back to the generic scraper on the
-    energy-specific sub-page of the DGS site.
-
-    Alternative: The California Energy Commission posts evaluation RFPs on
-    energy.ca.gov/contracts/ which is a simpler static page.
+    This function now prefers a dedicated CEC contracts parser that filters out
+    expired, awarded, closed, cancelled, and otherwise inactive solicitations.
+    It only falls back to the configured CaleProcure URL if CEC parsing returns
+    no usable candidates.
     """
-    # Try CEC's contracts page instead of CaleProcure -- more reliable
     cec_url = "https://www.energy.ca.gov/contracts"
-    html = _fetch_page(cec_url)
-    if html:
-        cec_opps = _scrape_generic_rfp_page(cec_url, "California CEC Contracts", "CA")
-        if cec_opps:
-            return cec_opps
+    cec_opps = _scrape_cec_contracts(cec_url, "California CEC Contracts", "CA")
+    if cec_opps:
+        return cec_opps
 
-    # Fall back to the configured CaleProcure URL
     return _scrape_generic_rfp_page(url, name, state)
+
+
+def _scrape_cec_contracts(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape California Energy Commission contracts / solicitations.
+
+    The generic scraper was too broad because it could capture CEC RFPs that
+    were already past due or awarded. This parser uses nearby listing context
+    to extract submission deadlines and status, then skips inactive records.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main-content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".region-content")
+        or soup.select_one(".view-content")
+        or soup
+    )
+
+    today = datetime.utcnow().date()
+
+    inactive_status_terms = [
+        "awarded",
+        "closed",
+        "cancelled",
+        "canceled",
+        "expired",
+        "intent to award",
+        "notice of proposed award",
+        "no longer accepting",
+        "not accepting",
+    ]
+
+    support_terms = [
+        "addendum",
+        "addenda",
+        "questions and answers",
+        "question and answer",
+        "q&a",
+        "q & a",
+        "notice of proposed award",
+        "intent to award",
+        "awarded",
+        "bid results",
+        "tabulation",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in main_content.find_all("a", href=True):
+        link_text = clean_text(link.get_text(" ", strip=True), max_length=500)
+        href = link.get("href", "")
+
+        if not link_text or not href:
+            continue
+
+        link_text_l = link_text.lower()
+        href_l = href.lower()
+
+        if any(term in link_text_l for term in support_terms):
+            continue
+        if any(term.replace(" ", "-") in href_l for term in support_terms):
+            continue
+
+        if not any(term in link_text_l for term in ["rfp", "rfq", "rfi", "solicitation", "grant funding opportunity"]):
+            parent = link.find_parent()
+            parent_text_l = clean_text(
+                parent.get_text(" ", strip=True) if parent else "",
+                max_length=1000,
+            ).lower()
+            if not any(term in parent_text_l for term in ["rfp", "rfq", "rfi", "request for proposal", "solicitation"]):
+                continue
+
+        container = (
+            link.find_parent("article")
+            or link.find_parent("tr")
+            or link.find_parent("li")
+            or link.find_parent("div", class_=lambda c: c and any(
+                token in c.lower() for token in ["views-row", "card", "node", "result", "contract"]
+            ))
+            or link.parent
+        )
+
+        context = clean_text(
+            container.get_text(" ", strip=True) if container else link_text,
+            max_length=2000,
+        )
+        context_l = context.lower()
+
+        if any(term in context_l for term in inactive_status_terms):
+            logger.info(f"CEC contracts: skipping inactive/status-closed listing: {link_text}")
+            continue
+
+        deadline = _extract_deadline_from_text(context)
+
+        if not deadline:
+            deadline_match = re.search(
+                r"(?:submission\s+deadline|deadline|due\s+date|proposals\s+due)\s*:?\s*"
+                r"([A-Z][a-z]+\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+                context,
+                flags=re.IGNORECASE,
+            )
+            if deadline_match:
+                deadline = normalize_date(deadline_match.group(1))
+
+        if deadline:
+            try:
+                deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+                if deadline_date < today:
+                    logger.info(
+                        f"CEC contracts: skipping expired listing with deadline "
+                        f"{deadline}: {link_text}"
+                    )
+                    continue
+            except ValueError:
+                logger.warning(
+                    f"CEC contracts: could not parse normalized deadline "
+                    f"{deadline!r} for {link_text}; keeping listing"
+                )
+
+        absolute_url = urllib.parse.urljoin(url, href)
+        if not absolute_url.startswith(("http://", "https://")):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        title = link_text
+        if title.lower() in {"view", "download", "details", "more information", "solicitation"}:
+            title = context[:250]
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=clean_text(title, max_length=300),
+            description=context or title,
+            issuer="California Energy Commission",
+            state=state,
+            deadline=deadline,
+            posted_date=None,
+        ))
+
+    logger.info(f"CEC contracts parser: {len(opportunities)} active entries parsed")
+    return opportunities
 
 def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
@@ -1676,6 +1824,154 @@ def _scrape_ct_eeb_rfps(url: str, name: str, state: str) -> List[Opportunity]:
 
     logger.info(f"CT EEB RFP parser: {len(opportunities)} entries parsed")
     return opportunities
+
+def _scrape_burlington_electric_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Burlington Electric Department's public RFP/vendor page.
+
+    The generic scraper is too broad for this page because it captures site
+    navigation links such as Contact Us, Privacy Policy, and Contractor
+    Application. This parser limits extraction to main page content and keeps
+    only links or nearby text that look like active procurement opportunities.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one("#main-content")
+        or soup.select_one(".main-content")
+        or soup.select_one(".entry-content")
+        or soup.select_one(".page-content")
+        or soup
+    )
+
+    page_text_l = clean_text(main_content.get_text(" ", strip=True)).lower()
+    no_active_terms = [
+        "there are no current rfps",
+        "no current rfps",
+        "no active rfps",
+        "currently no rfps",
+        "no requests for proposals",
+    ]
+    if any(term in page_text_l for term in no_active_terms):
+        logger.info("BED RFPs: no active RFPs detected on page")
+        return []
+
+    include_terms = [
+        "rfp",
+        "rfq",
+        "rfi",
+        "request for proposal",
+        "request for proposals",
+        "request for qualifications",
+        "request for information",
+        "bid",
+        "proposal",
+    ]
+
+    exclude_terms = [
+        "skip to content",
+        "contact us",
+        "privacy policy",
+        "contractor application",
+        "become a bed vendor",
+        "vendor",
+        "home",
+        "login",
+        "search",
+        "menu",
+        "facebook",
+        "twitter",
+        "linkedin",
+        "instagram",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True), max_length=500)
+        href = link.get("href", "")
+
+        if not title or not href:
+            continue
+
+        title_l = title.lower()
+        absolute_url = urllib.parse.urljoin(url, href)
+        absolute_url_l = absolute_url.lower()
+
+        # BED's actual public RFP listings use /rfpdetail?rfp=...
+        # Skip page-navigation, vendor, and contact links such as Email.
+        if "burlingtonelectric.com" in absolute_url_l and "/rfpdetail" not in absolute_url_l:
+            continue
+
+        if absolute_url.rstrip("/") == url.rstrip("/") and "rfp" not in title_l:
+            continue
+
+        if any(term in title_l for term in exclude_terms):
+            continue
+
+        parent = (
+            link.find_parent("article")
+            or link.find_parent("li")
+            or link.find_parent("tr")
+            or link.find_parent("div")
+            or link.parent
+        )
+        context = clean_text(
+            parent.get_text(" ", strip=True) if parent else title,
+            max_length=1000,
+        )
+        context_l = context.lower()
+
+        if not any(term in f"{title_l} {context_l}" for term in include_terms):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        deadline = _extract_deadline_from_text(context)
+
+        if deadline:
+            try:
+                deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+                if deadline_date < datetime.utcnow().date():
+                    logger.info(
+                        f"BED RFPs: skipping expired listing with deadline "
+                        f"{deadline}: {title}"
+                    )
+                    continue
+            except ValueError:
+                logger.warning(
+                    f"BED RFPs: could not parse normalized deadline "
+                    f"{deadline!r} for {title}; keeping listing"
+                )
+
+        display_title = title
+        if not display_title.lower().startswith("bed rfp"):
+            display_title = f"BED RFP {display_title}"
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=display_title,
+            description=context or display_title,
+            issuer="Burlington Electric Department",
+            state=state,
+            deadline=deadline,
+            posted_date=None,
+        ))
+
+    logger.info(f"BED RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """

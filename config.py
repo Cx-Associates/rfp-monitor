@@ -382,6 +382,15 @@ UTILITY_SOURCES = [
         "notes": "Efficiency Maine opportunity/RFP page. Uses dedicated parser to extract detail-page deadlines.",
     },
     {
+        "name": "Burlington Electric Department RFPs",
+        "url": "https://www.burlingtonelectric.com/rfp/",
+        "state": "VT",
+        "type": "burlington_electric_rfps",
+        "js_render": False,
+        "active": True,
+        "notes": "Burlington Electric Department public RFP page. Uses dedicated parser to avoid navigation links.",
+    },
+    {
         "name": "Mass Save / EEAC",
         "url": "https://www.masssave.com/trade-partners/requests-for-proposals",
         "js_render": False,
