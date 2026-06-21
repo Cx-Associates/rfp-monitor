@@ -66,12 +66,20 @@ The important distinction is:
 | Vermont Business Registry          | Working            | Dedicated parser and added as broader Vermont fallback source.                                                                                                                |
 | Massachusetts COMMBUYS             | Working            | Dedicated parser for current public open-bid HTML.                                                                                                                            |
 | NYSERDA                            | Working            | Included as utility source and direct NY source. Can occasionally time out; run continues.                                                                                    |
-| California CaleProcure             | Working            | Direct scrape source.                                                                                                                                                         |
+| California CaleProcure             | Working            | Direct scrape source; now prefers a dedicated California Energy Commission contracts parser that filters inactive/expired CEC solicitations before falling back.                 |
 | Green Mountain Power               | Working / noisy    | Generic source; some older PDFs may remain in manual review.                                                                                                                  |
 | Mass Save / EEAC                   | Working            | Generic RFP source.                                                                                                                                                           |
 | DOE EERE Funding Opportunities     | Working            | Broad national source.                                                                                                                                                        |
 | ISO-NE Solicitations               | Working / noisy    | Generic source; some non-RFP links may fall into manual review.                                                                                                               |
 | Entergy RFPs                       | Working            | Dedicated parser skips stale prior-year RFPs.                                                                                                                                 |
+| Energy Trust of Oregon             | Working            | Dedicated parser for contracting opportunities; current RFQ/PER-style opportunities can score as high confidence when evaluation/research terms are present.                   |
+| PG&E Energy Efficiency Solicitations | Working          | Dedicated parser for PG&E energy efficiency third-party solicitations.                                                                                                         |
+| Cape Light Compact RFPs             | Working            | Dedicated parser reads current listing cards and filters non-current/closed listing noise.                                                                                     |
+| Burlington Electric Department RFPs | Working / limited  | Dedicated parser monitors the stable BED listing page and keeps dynamic `/rfpdetail?rfp=...` links; detail pages may be Cloudflare-blocked, so items usually stay manual review. |
+| NYS Contract Reporter               | Working / broad    | Dedicated parser extracts public listing fields from NYSCR text blocks, including CR number, issuer, issue date, due date, category, and ad type; detail pages may require login. |
+| Connecticut DEEP RFP Search         | Working / filtered | Dedicated parser filters CT DEEP search results to energy/RFP-related items and removes pagination, older press releases, public-comment pages, parks/concession noise, and closed/no-award items. |
+| NH Department of Energy RFPs        | Working            | Dedicated parser for NH Department of Energy/Public Utilities Commission RFP page and detail pages.                                                                            |
+| Connecticut Energy Efficiency Board RFPs | Working       | Dedicated parser reads only open RFP/RFQ content from the CT Energy Efficiency Board page.                                                                                     |
 | NYISO Procurement                  | Needs follow-up    | Current configured URL returns 404; left unchanged for now.                                                                                                                   |
 | National Grid                      | Phase 2            | Skipped because source is JavaScript-rendered.                                                                                                                                |
 | Avangrid / United Illuminating     | Phase 2            | Skipped because source is JavaScript-rendered.                                                                                                                                |
@@ -201,6 +209,16 @@ GitHub → Actions → CxA RFP Monitor → Run workflow
 | `force_all`  | If `true`, skips deduplication and reports all passing opportunities. Use carefully.        |
 | `send_email` | If `true`, passes the SendGrid key and allows email delivery. If `false`, email is skipped. |
 
+### Monitor Type
+
+The GitHub Actions workflow sets:
+
+```text
+MONITOR_TYPE: emv
+```
+
+This scopes Supabase deduplication, active dashboard cache records, and manual-review suppressions to the EM&V monitor. The Supabase tables include a `monitor_type` column so future monitors, such as commissioning or RCx, can share the same tables without mixing records.
+
 ### Recommended Manual Test Settings
 
 Dashboard and Supabase active-cache test without email:
@@ -312,6 +330,9 @@ EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 ```
 
 The sending address must be authorized/accepted by SendGrid.
+
+Current recipients are controlled only by the `EMAIL_TO` list in `config.py`. As of the attached configuration, that list includes Riazul, Eric, Carrie, Liza, Rachael, and Matt.
+
 
 ---
 
@@ -754,6 +775,114 @@ The COMMBUYS parser uses the current public open-bid HTML table layout and extra
 
 If COMMBUYS changes its layout, this parser may need to be updated.
 
+### Energy Trust of Oregon
+
+The Energy Trust parser reads contracting opportunity listings and captures opportunities such as Planning, Evaluation and Research RFQs. These can score highly when the title or description includes evaluation/research terminology.
+
+### PG&E Energy Efficiency Solicitations
+
+The PG&E parser targets energy-efficiency solicitation listings and extracts solicitation title, issuer, URL, and source context for scoring.
+
+### Cape Light Compact RFPs
+
+The Cape Light parser reads current RFP/RFI listing cards and is intended to avoid stale or closed listing noise.
+
+### Burlington Electric Department RFPs
+
+The BED parser monitors the stable listing page:
+
+```text
+https://www.burlingtonelectric.com/rfp/
+```
+
+It keeps only dynamic detail links that match the pattern:
+
+```text
+/rfpdetail?rfp=...
+```
+
+This avoids navigation, contact, vendor, and footer links such as Contact Us, Email, Privacy Policy, and Contractor Application.
+
+Important limitation: BED detail pages can be Cloudflare-blocked from direct `requests` access. Because of that, the parser does not rely on fetching the detail page. It uses the RFP number from the listing link and displays titles like:
+
+```text
+BED RFP 071-26
+```
+
+Since the accessible listing text may not include scope, title, or deadline detail, BED opportunities may not score into the main dashboard/email. Check the manual-review section for BED items.
+
+### California CEC Contracts / CaleProcure
+
+The `ca_eprocure` source now prefers a dedicated California Energy Commission contracts parser. This avoids the generic scraper pulling stale or inactive CEC solicitations.
+
+The CEC parser:
+
+* reads the public CEC contracts/solicitations page,
+* skips inactive statuses such as awarded, closed, cancelled/canceled, expired, intent to award, notice of proposed award, no longer accepting, and not accepting,
+* skips support-document links such as addenda, Q&A, question/answer, award notices, bid results, and tabulations,
+* extracts submission deadlines where visible,
+* skips opportunities with parsed deadlines before today.
+
+If the CEC parser returns no active entries, the source can fall back to the generic CaleProcure page behavior.
+
+### NYS Contract Reporter
+
+The NYSCR parser reads the public search-result text blocks from:
+
+```text
+https://www.nyscr.ny.gov/Ads/Search
+```
+
+It extracts listing fields including:
+
+* title,
+* CR number,
+* issuing agency or company,
+* issue date,
+* due date,
+* category,
+* ad type,
+* note text when available.
+
+The CR number is used as the stable internal notice ID, using the pattern:
+
+```text
+NYSCR-<CR number>
+```
+
+NYSCR detail links may require login. For that reason, the dashboard URL points to the NYSCR search page, while the deduplication key remains stable through the CR number.
+
+Because NYSCR is broad and can return many construction/general procurement records, most NYSCR items are expected to remain below threshold unless their title or description matches EM&V/energy keywords.
+
+### Connecticut DEEP RFP Search
+
+The CT DEEP parser reads the public CT DEEP search results page for RFP-related results and applies source-specific filters.
+
+The current parser keeps energy-related terms such as:
+
+* energy efficiency,
+* zero carbon,
+* solar,
+* wind,
+* renewable,
+* clean energy,
+* grid,
+* resilience,
+* ratepayer,
+* decarbonization.
+
+It excludes common noise such as pagination controls, public-comment pages, draft RFP pages, “receives proposals,” “no award,” older year pages, parks/concession pages, paddlecraft, boat launch/marina, food and beverage, solid-waste/CSWSP pages, and addenda.
+
+CT DEEP result pages often do not expose a clean due date in the search result. When no deadline is found, the dashboard may show `--` for deadline and the active cache will use the no-deadline persistence rule.
+
+### NH Department of Energy RFPs
+
+The NH Department of Energy parser is source-specific because RFP summary pages and detail pages have more useful context than generic anchor text alone. It targets current RFP records and extracts available title, deadline, issuer, and description context.
+
+### Connecticut Energy Efficiency Board RFPs
+
+The CT EEB parser reads the Energy Efficiency Board RFP/RFQ page and targets open opportunities rather than archived or informational content.
+
 ### NYISO Procurement
 
 The currently configured NYISO procurement URL returns 404. This source needs a replacement URL or should be disabled if no reliable public solicitation page is identified.
@@ -978,6 +1107,9 @@ where monitor_type = 'emv'
 | Source drift                                | Website redesigns may silently reduce candidates to zero. Active dashboard cache protects passing opportunities after first detection, but source-specific parsers still need maintenance. |
 | PJM solicitations                           | Configured URL appears broken or no longer exposes a useful solicitation page. Disable or replace once a reliable static PJM RFP/procurement source is identified.                         |
 | COMMBUYS noise                              | COMMBUYS can produce many below-threshold manual-review rows. Use suppression or source-specific filtering if it becomes too noisy.                                                        |
+| BED RFP detail pages                         | BED detail URLs may be Cloudflare-blocked from direct scraping. The parser uses the listing page and dynamic `/rfpdetail?rfp=...` links only, so BED items may remain manual review due to limited text. |
+| NYS Contract Reporter detail links          | NYSCR detail pages can require login. The parser extracts public listing fields and uses the CR number as the stable notice ID; dashboard links point back to the NYSCR search page.                   |
+| CT DEEP search-result metadata              | CT DEEP search results may not expose due dates. The parser filters heavily for energy-related RFP pages, but deadline fields may remain blank.                                             |
 | Local Supabase warning                      | Local dry runs may warn that `SUPABASE_URL` / `SUPABASE_KEY` are missing. This is expected unless those variables are set locally.                                                         |
 | Deprecation warning for `datetime.utcnow()` | Python may warn that `datetime.utcnow()` is deprecated in newer versions. This is not currently breaking the workflow but can be cleaned up later with timezone-aware datetimes.           |
 
