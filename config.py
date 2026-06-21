@@ -592,6 +592,15 @@ UTILITY_SOURCES = [
         "notes": "Efficiency Maine opportunity/RFP page. Uses dedicated parser to extract detail-page deadlines.",
     },
     {
+        "name": "Burlington Electric Department RFPs",
+        "url": "https://www.burlingtonelectric.com/rfp/",
+        "state": "VT",
+        "type": "burlington_electric_rfps",
+        "js_render": False,
+        "active": True,
+        "notes": "Burlington Electric Department public RFP page. Uses dedicated parser to avoid navigation links.",
+    },
+    {
         "name": "Mass Save / EEAC",
         "url": "https://www.masssave.com/trade-partners/requests-for-proposals",
         "js_render": False,
@@ -693,6 +702,24 @@ DIRECT_SCRAPE_STATES = [
         "notes": "CEC issues large EM&V and program evaluation RFPs.",
     },
     {
+        "name": "NYS Contract Reporter",
+        "url": "https://www.nyscr.ny.gov/Ads/Search",
+        "state": "NY",
+        "type": "nyscr_contract_reporter",
+        "js_render": False,
+        "active": True,
+        "notes": "New York State Contract Reporter open opportunities page. Uses dedicated text-block parser because detail links require login.",
+    },
+    {
+        "name": "Connecticut DEEP RFP Search",
+        "url": "https://portal.ct.gov/deep/search-results?SearchKeyword=RFP",
+        "state": "CT",
+        "type": "ct_deep_rfp_search",
+        "js_render": False,
+        "active": True,
+        "notes": "CT DEEP search results filtered for current RFP/proposal-related pages.",
+    },
+    {
         "name": "Vermont DPS Requests for Proposals",
         "url": "https://publicservice.vermont.gov/document-categories/requests-proposals",
         "state": "VT",
@@ -759,7 +786,8 @@ EMAIL_TO = [
     "eric@cx-assoc.com",
     "carrie.napolitan@cx-assoc.com",
     "liza.boyle@cx-assoc.com",
-    "rachael@cx-assoc.com"
+    "rachael@cx-assoc.com",
+    "matt@cx-assoc.com"
 ]
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
