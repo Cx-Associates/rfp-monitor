@@ -318,6 +318,10 @@ def _scrape_by_type(
         return _scrape_aesp_rfps(url, name, state)
     elif ptype == "burlington_electric_rfps":
         return _scrape_burlington_electric_rfps(url, name, state)
+    elif ptype == "ct_deep_rfp_search":
+        return _scrape_ct_deep_rfp_search(url, name, state)
+    elif ptype == "nyscr_contract_reporter":
+        return _scrape_nyscr_contract_reporter(url, name, state)
     elif ptype == "neep_rfps":
         return _scrape_neep_rfps(url, name, state)
     elif ptype == "efficiency_maine_rfps":
@@ -1824,6 +1828,245 @@ def _scrape_ct_eeb_rfps(url: str, name: str, state: str) -> List[Opportunity]:
 
     logger.info(f"CT EEB RFP parser: {len(opportunities)} entries parsed")
     return opportunities
+
+def _scrape_nyscr_contract_reporter(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the NYS Contract Reporter open opportunities page.
+
+    NYSCR exposes result fields in the page text, but individual opportunity
+    detail links require login. This parser extracts the listing fields directly
+    from the public search result blocks and uses the CR number as the stable
+    notice ID.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#main")
+        or soup.select_one(".content")
+        or soup
+    )
+
+    lines = [
+        clean_text(line, max_length=1000)
+        for line in main_content.get_text("\n", strip=True).splitlines()
+        if clean_text(line, max_length=1000)
+    ]
+
+    def next_value(block: List[str], label: str) -> Optional[str]:
+        for i, line in enumerate(block):
+            if line.strip().lower() == label.lower():
+                for j in range(i + 1, len(block)):
+                    candidate = block[j].strip()
+                    if candidate and not candidate.endswith(":"):
+                        return candidate
+        return None
+
+    # Result blocks start with two-digit row labels like 01, 02, 03.
+    starts = [
+        i for i, line in enumerate(lines)
+        if re.fullmatch(r"\d{2}", line.strip())
+    ]
+
+    opportunities = []
+    seen_ids = set()
+    today = datetime.utcnow().date()
+
+    for pos, start in enumerate(starts):
+        end = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+        block = lines[start:end]
+
+        title = next_value(block, "Title:")
+        cr_number = next_value(block, "CR#:")
+        issuer = next_value(block, "Agency:") or next_value(block, "Company:")
+        issue_date_raw = next_value(block, "Issue date:")
+        due_date_raw = next_value(block, "Due date:")
+        category = next_value(block, "Category:")
+        ad_type = next_value(block, "Ad type:")
+        note = next_value(block, "Note:")
+
+        if not title or not cr_number:
+            continue
+
+        if cr_number in seen_ids:
+            continue
+        seen_ids.add(cr_number)
+
+        deadline = normalize_date(due_date_raw) if due_date_raw else None
+        posted_date = normalize_date(issue_date_raw) if issue_date_raw else None
+
+        if deadline:
+            try:
+                if datetime.strptime(deadline, "%Y-%m-%d").date() < today:
+                    logger.info(
+                        f"NYSCR: skipping expired opportunity with deadline "
+                        f"{deadline}: {title}"
+                    )
+                    continue
+            except ValueError:
+                logger.warning(
+                    f"NYSCR: could not parse normalized deadline "
+                    f"{deadline!r} for {title}; keeping listing"
+                )
+
+        description_parts = []
+        if note:
+            description_parts.append(f"Note: {note}")
+        if category:
+            description_parts.append(f"Category: {category}")
+        if ad_type:
+            description_parts.append(f"Ad type: {ad_type}")
+        if issuer:
+            description_parts.append(f"Issuer: {issuer}")
+        if due_date_raw:
+            description_parts.append(f"Due date: {due_date_raw}")
+        if cr_number:
+            description_parts.append(f"CR#: {cr_number}")
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=f"NYSCR-{cr_number}",
+            url=url,
+            title=title,
+            description=" | ".join(description_parts) or title,
+            issuer=issuer or "NYS Contract Reporter",
+            state=state,
+            deadline=deadline,
+            posted_date=posted_date,
+        ))
+
+    logger.info(f"NYSCR parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+
+def _scrape_ct_deep_rfp_search(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape CT DEEP RFP search results.
+
+    The generic parser is too broad for this page because it captures skip links,
+    historic press releases, public-comment pages, and closed/no-award items.
+    This parser keeps CT DEEP result links that look like current RFP/proposal
+    opportunities and lets EM&V scoring decide whether they belong on the main
+    dashboard.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    main_content = (
+        soup.select_one("main")
+        or soup.select_one("#mainContent")
+        or soup.select_one("#main-content")
+        or soup.select_one(".search-results")
+        or soup.select_one(".content")
+        or soup
+    )
+
+    include_terms = [
+        "energy efficiency",
+        "zero carbon",
+        "solar",
+        "wind",
+        "renewable",
+        "clean energy",
+        "grid",
+        "resilience",
+        "ratepayer",
+        "decarbonization",
+    ]
+
+    exclude_terms = [
+        "skip to content",
+        "skip to chat",
+        "public comment",
+        "draft rfp",
+        "receives proposals",
+        "concludes",
+        "no award",
+        "addendum",
+        "paddlecraft",
+        "concession",
+        "parks",
+        "park",
+        "food and beverage",
+        "marina",
+        "boat launch",
+        "solid waste",
+        "cswsp",
+        "2019",
+        "2020",
+        "2021",
+        "2022",
+        "2023",
+        "2024",
+        "2025",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    for link in main_content.find_all("a", href=True):
+        title = clean_text(link.get_text(" ", strip=True), max_length=500)
+        href = link.get("href", "")
+
+        if not title or not href:
+            continue
+
+        # Skip pagination/search-result controls.
+        if title.strip().isdigit():
+            continue
+
+        absolute_url = urllib.parse.urljoin(url, href)
+        title_l = title.lower()
+        url_l = absolute_url.lower()
+
+        if "portal.ct.gov/deep/" not in url_l:
+            continue
+
+        combined_l = f"{title_l} {url_l}"
+
+        if not any(term in combined_l for term in include_terms):
+            continue
+
+        if any(term in combined_l for term in exclude_terms):
+            continue
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        parent = (
+            link.find_parent("article")
+            or link.find_parent("li")
+            or link.find_parent("div")
+            or link.parent
+        )
+        context = clean_text(
+            parent.get_text(" ", strip=True) if parent else title,
+            max_length=1200,
+        )
+
+        deadline = _extract_deadline_from_text(context)
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=context or title,
+            issuer="Connecticut Department of Energy and Environmental Protection",
+            state=state,
+            deadline=deadline,
+            posted_date=None,
+        ))
+
+    logger.info(f"CT DEEP RFP parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 def _scrape_burlington_electric_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
