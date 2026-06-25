@@ -727,6 +727,14 @@ DIRECT_SCRAPE_STATES = [
         "notes": "Fallback Vermont DPS RFP page. Added because VSIGNS fails DNS resolution from GitHub/local environments.",
     },
     {
+        "name": "VT BGS OPC Current Bid Listings",
+        "url": "http://www.bgs.state.vt.us/pca/bids/bids.php",
+        "state": "VT",
+        "type": "vt_bgs_opc_bids",
+        "active": True,
+        "notes": "Vermont BGS Office of Purchasing and Contracting current bid listings. Dedicated parser keeps top-level bid documents and skips addenda/Q&A/supporting files.",
+    },
+    {
         "name": "Vermont Business Registry Bid Search",
         "url": "https://www.vermontbusinessregistry.com/bidsearch.aspx?type=1",
         "state": "VT",

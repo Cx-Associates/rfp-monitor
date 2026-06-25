@@ -312,6 +312,8 @@ def _scrape_by_type(
         return _scrape_vermont_dps_rfps(url, name, state)
     elif ptype == "vermont_business_registry":
         return _scrape_vermont_business_registry(url, name, state)
+    elif ptype == "vt_bgs_opc_bids":
+        return _scrape_vt_bgs_opc_bids(url, name, state)
     elif ptype == "veic_rfps":
         return _scrape_veic_rfps(url, name, state)
     elif ptype == "aesp_rfps":
@@ -2521,6 +2523,158 @@ def _scrape_vermont_dps_rfps(url: str, name: str, state: str) -> List[Opportunit
 
     logger.info(f"Vermont DPS dedicated parser: {len(opportunities)} entries parsed")
     return opportunities
+
+def _scrape_vt_bgs_opc_bids(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Vermont BGS Office of Purchasing and Contracting current bid listings.
+
+    This page exposes a simple HTML table with columns for title, questions due,
+    answers posted, due date, and no-posting-after. The generic parser is too
+    noisy because it captures addenda, Q&A files, response forms, and other
+    support documents as standalone opportunities.
+
+    This parser creates one Opportunity per table row, using the first
+    meaningful top-level bid/RFP document link in the row as the opportunity URL.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    bid_table = None
+    for table in soup.find_all("table"):
+        table_text = clean_text(table.get_text(" ", strip=True)).lower()
+        if "title" in table_text and "questions" in table_text and "due" in table_text:
+            bid_table = table
+
+    if not bid_table:
+        logger.info("VT BGS OPC: no current bid table found")
+        return []
+
+    support_terms = [
+        "addendum",
+        "q&a",
+        "questions answered",
+        "questions & answers",
+        "bidder response",
+        "response form",
+        "additional documents",
+        "bid tab",
+        "tabulation",
+        "plan holders",
+        "attendance",
+        "conference",
+    ]
+
+    opportunities = []
+    seen_urls = set()
+
+    rows = bid_table.find_all("tr")
+    for row in rows[1:]:
+        cells = row.find_all(["td", "th"])
+        if not cells:
+            continue
+
+        row_text = clean_text(row.get_text(" ", strip=True), max_length=1500)
+        if not row_text:
+            continue
+
+        title_cell = cells[0]
+        chosen_link = None
+
+        for link in title_cell.find_all("a", href=True):
+            link_text = clean_text(link.get_text(" ", strip=True), max_length=500)
+            href = link.get("href", "")
+            combined_l = f"{link_text} {href}".lower()
+
+            if not link_text or len(link_text) < 8:
+                continue
+
+            if any(term in combined_l for term in support_terms):
+                continue
+
+            absolute_url = urllib.parse.urljoin(url, href)
+            if not absolute_url.startswith(("http://", "https://")):
+                continue
+
+            chosen_link = (link_text, absolute_url)
+            break
+
+        if not chosen_link:
+            continue
+
+        title, absolute_url = chosen_link
+
+        if absolute_url in seen_urls:
+            continue
+        seen_urls.add(absolute_url)
+
+        # Expected columns:
+        # 0 title, 1 questions due, 2 answers posted, 3 due date, 4 no posting after
+        def cell_text(index: int) -> str:
+            return clean_text(cells[index].get_text(" ", strip=True)) if len(cells) > index else ""
+
+        questions_due = cell_text(1)
+        answers_posted = cell_text(2)
+        due_raw = cell_text(3)
+        no_posting_after = cell_text(4)
+
+        # BGS due-date cells often look like "06/30/2026 04:30PM".
+        # Extract only the actual date so normalize_date does not misread
+        # the time component, e.g. "04:30PM", as April 30.
+        import re as _re
+        from datetime import datetime as _datetime, date as _date
+
+        deadline = None
+        if due_raw:
+            date_match = _re.search(r"\b\d{1,2}/\d{1,2}/\d{4}\b", due_raw)
+            if date_match:
+                deadline = normalize_date(date_match.group(0))
+            else:
+                deadline = _extract_deadline_from_text(due_raw)
+
+        if not deadline:
+            deadline = _extract_deadline_from_text(row_text)
+
+        # Skip expired BGS listings. The page can keep recently closed rows online
+        # for addenda/recordkeeping, but they should not enter the active monitor.
+        if deadline:
+            try:
+                deadline_date = _datetime.strptime(str(deadline), "%Y-%m-%d").date()
+                if deadline_date < _date.today():
+                    logger.info(f"VT BGS OPC parser: skipping expired listing with deadline {deadline}: {title}")
+                    continue
+            except Exception:
+                pass
+
+        description_parts = [
+            row_text,
+        ]
+        if questions_due:
+            description_parts.append(f"Questions due: {questions_due}")
+        if answers_posted:
+            description_parts.append(f"Answers posted: {answers_posted}")
+        if due_raw:
+            description_parts.append(f"Due date: {due_raw}")
+        if no_posting_after:
+            description_parts.append(f"No posting after: {no_posting_after}")
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=absolute_url,
+            url=absolute_url,
+            title=title,
+            description=clean_text(" | ".join(description_parts), max_length=1500),
+            issuer="Vermont Department of Buildings and General Services",
+            state=state,
+            deadline=deadline,
+            posted_date=None,
+        ))
+
+    logger.info(f"VT BGS OPC parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 def _scrape_vermont_business_registry(url: str, name: str, state: str) -> List[Opportunity]:
     """
