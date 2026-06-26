@@ -335,6 +335,18 @@ COMMISSIONING_KEYWORDS_SECONDARY = [
     "waterproofing consultant",
     "moisture investigation",
     "leak investigation",
+    # Construction / site-walk procurement indicators
+    "construction manager",
+    "general contractor",
+    "CM/GC",
+    "site walkthrough",
+    "mandatory site visit",
+    "mandatory walkthrough",
+    "pre-bid meeting",
+    "prebid meeting",
+    "pre-proposal meeting",
+    "preproposal meeting",
+
 ]
 
 COMMISSIONING_KEYWORDS_TERTIARY = [
@@ -381,6 +393,18 @@ COMMISSIONING_KEYWORDS_TERTIARY = [
     "test and balance",
     "testing and balancing",
     "testing adjusting and balancing",
+    # Construction / site-walk procurement indicators
+    "site visit",
+    "walkthrough",
+    "walk-through",
+    "job walk",
+    "site walk",
+    "bid walk",
+    "facility walkthrough",
+    "facility walk-through",
+    "mandatory pre-bid",
+    "mandatory prebid",
+
 ]
 
 # Tuning guide:
