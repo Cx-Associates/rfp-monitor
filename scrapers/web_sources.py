@@ -314,6 +314,12 @@ def _scrape_by_type(
         return _scrape_vermont_business_registry(url, name, state)
     elif ptype == "vt_bgs_opc_bids":
         return _scrape_vt_bgs_opc_bids(url, name, state)
+    elif ptype == "civicengage_bids":
+        return _scrape_civicengage_bids(url, name, state)
+    elif ptype == "fairfax_vt_bids":
+        return _scrape_fairfax_vt_bids(url, name, state)
+    elif ptype == "municipal_document_links":
+        return _scrape_municipal_document_links(url, name, state)
     elif ptype == "veic_rfps":
         return _scrape_veic_rfps(url, name, state)
     elif ptype == "aesp_rfps":
@@ -2673,6 +2679,398 @@ def _scrape_vt_bgs_opc_bids(url: str, name: str, state: str) -> List[Opportunity
         ))
 
     logger.info(f"VT BGS OPC parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+
+
+def _scrape_civicengage_bids(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape CivicEngage municipal bid posting pages.
+
+    CivicEngage pages expose current opportunities as links like:
+      bids.aspx?bidID=164
+
+    The same bidID can appear multiple times across categories, so this parser
+    dedupes by bidID and fetches the detail page for better title/text.
+    """
+    import re
+    from urllib.parse import parse_qs, urljoin, urlparse
+
+    opportunities: List[Opportunity] = []
+    seen_bid_ids = set()
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    for link in soup.find_all("a", href=True):
+        href = urljoin(resp.url, link["href"])
+
+        if "bidid=" not in href.lower():
+            continue
+
+        parsed = urlparse(href)
+        qs = parse_qs(parsed.query)
+
+        bid_id = None
+        for key, values in qs.items():
+            if key.lower() == "bidid" and values:
+                bid_id = values[0].strip()
+                break
+
+        if not bid_id or bid_id in seen_bid_ids:
+            continue
+
+        seen_bid_ids.add(bid_id)
+
+        raw_title = clean_text(link.get_text(" ", strip=True))
+        raw_title = re.sub(r"^read\s+on\s*:?\s*", "", raw_title, flags=re.IGNORECASE).strip()
+
+        parent = link
+        for _ in range(5):
+            if parent.parent:
+                parent = parent.parent
+
+        listing_text = clean_text(parent.get_text(" ", strip=True))
+
+        detail_text = ""
+        detail_soup = None
+
+        try:
+            detail_resp = requests.get(href, headers=headers, timeout=30)
+            detail_resp.raise_for_status()
+            detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+            detail_text = clean_text(detail_soup.get_text(" ", strip=True))
+        except Exception:
+            detail_text = ""
+
+        combined_text = clean_text(" ".join([raw_title, listing_text, detail_text]))
+
+        # Skip clearly non-open postings.
+        if re.search(r"Status:\s*(Closed|Awarded|Cancelled|Canceled)", combined_text, re.IGNORECASE):
+            continue
+
+        # If CivicEngage exposes a status field, require Open.
+        if "Status:" in combined_text and "Open" not in combined_text:
+            continue
+
+        title = raw_title
+
+        # Detail pages may expose a cleaner title, but CivicEngage can also expose
+        # CMS/admin headings such as "Live Edit". Prefer the listing title unless
+        # the detail heading is clearly meaningful.
+        bad_detail_titles = {
+            "bid postings",
+            "bid details",
+            "live edit",
+            "notify me",
+            "sign in",
+            "website sign in",
+        }
+
+        if detail_soup:
+            for tag in detail_soup.find_all(["h1", "h2", "h3"]):
+                candidate = clean_text(tag.get_text(" ", strip=True))
+                lower_candidate = candidate.lower()
+
+                if not candidate or len(candidate) <= 5:
+                    continue
+
+                if lower_candidate in bad_detail_titles:
+                    continue
+
+                if "civicengage" in lower_candidate:
+                    continue
+
+                title = candidate
+                break
+
+        if not title:
+            title = f"{name} bid {bid_id}"
+
+        deadline = None
+        close_match = re.search(
+            r"Closes:\s*Open\s+((?:\d{1,2}/\d{1,2}/\d{4})|(?:Upon Contract))",
+            combined_text,
+            re.IGNORECASE,
+        )
+        if close_match:
+            raw_close = close_match.group(1).strip()
+            if raw_close.lower() != "upon contract":
+                deadline = normalize_date(raw_close)
+
+        description_parts = [
+            f"Issuer: {name}",
+            f"Bid ID: {bid_id}",
+        ]
+
+        if deadline:
+            description_parts.append(f"Closes: {deadline}")
+
+        description_parts.append(combined_text[:1800])
+
+        opp = Opportunity(
+            source=name,
+            notice_id=f"bidID-{bid_id}",
+            url=href,
+            title=title,
+            description=clean_text(" | ".join(description_parts)),
+            issuer=name,
+            deadline=deadline,
+            state=state,
+        )
+
+        if opp.is_expired():
+            continue
+
+        opportunities.append(opp)
+
+    logger.info(f"CivicEngage bids parser: {name}: {len(opportunities)} entries parsed")
+    return opportunities
+
+
+
+
+def _scrape_municipal_document_links(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Generic municipal procurement page parser for pages that expose direct
+    PDF/DOC/DocumentCenter links rather than structured bid tables.
+
+    Keeps likely primary bid/RFP/RFQ documents and skips common supporting
+    documents such as addenda, revised bid sheets, results, contracts, and
+    navigation links. Scoring still determines whether each item passes.
+    """
+    import re
+    from urllib.parse import urljoin, urlparse
+
+    opportunities: List[Opportunity] = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    include_terms = [
+        "rfp",
+        "rfq",
+        "bid",
+        "proposal",
+        "qualifications",
+        "construction",
+        "maintenance",
+        "services",
+    ]
+
+    exclude_terms = [
+        "addendum",
+        "bid sheet",
+        "revised bid sheet",
+        "results",
+        "bid results",
+        "contract",
+        "contracts",
+        "purchasing policy",
+        "skip to",
+        "sign up",
+        "subscribe",
+        "quick links",
+        "site links",
+        "loading",
+        "view rfq packet",
+        "view rfp packet",
+        "view bid packet",
+    ]
+
+    def normalize_key(raw: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (raw or "").lower()).strip()
+
+    seen_urls = set()
+    seen_titles = set()
+
+    for a in soup.find_all("a", href=True):
+        title = clean_text(a.get_text(" ", strip=True))
+        href = urljoin(resp.url, a["href"])
+
+        if not title:
+            continue
+
+        title_norm = normalize_key(title)
+        href_lower = href.lower()
+        combined = f"{title_norm} {href_lower}"
+
+        if any(term in combined for term in exclude_terms):
+            continue
+
+        has_procurement_term = any(term in combined for term in include_terms)
+        has_document_shape = any(
+            marker in href_lower
+            for marker in [
+                ".pdf",
+                ".doc",
+                ".docx",
+                "/documentcenter/view/",
+                "storage.googleapis.com",
+                "/wp-content/uploads/",
+            ]
+        )
+
+        if not has_procurement_term or not has_document_shape:
+            continue
+
+        # Avoid duplicate packet links like descriptive title + "[View RFQ Packet]"
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+
+        dedupe_title = title_norm
+        if dedupe_title in seen_titles:
+            continue
+        seen_titles.add(dedupe_title)
+
+        parsed = urlparse(href)
+        notice_id = parsed.path.rsplit("/", 1)[-1] or title
+        notice_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", notice_id)[:120]
+
+        opp = Opportunity(
+            source=name,
+            notice_id=notice_id,
+            url=href,
+            title=title,
+            description=clean_text(
+                f"Issuer/source: {name} | "
+                f"Municipal procurement document link found on source page: {url}"
+            ),
+            issuer=name,
+            posted_date=None,
+            deadline=None,
+            state=state,
+        )
+
+        opportunities.append(opp)
+
+    logger.info(f"Municipal document links parser: {name}: {len(opportunities)} entries parsed")
+    return opportunities
+
+
+def _scrape_fairfax_vt_bids(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape the Town of Fairfax, VT RFP page.
+
+    The page exposes a table with:
+      Description | Opening Date/Time | Closing Date/Time
+
+    It also includes direct document links whose anchor text matches the
+    description. This parser keeps only rows with a usable closing date and
+    skips expired items.
+    """
+    import re
+    from urllib.parse import urljoin, urlparse
+
+    opportunities: List[Opportunity] = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    def normalize_key(raw: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (raw or "").lower()).strip()
+
+    # Build title -> direct document URL map from links on the page.
+    link_map = {}
+    for a in soup.find_all("a", href=True):
+        link_text = clean_text(a.get_text(" ", strip=True))
+        href = urljoin(resp.url, a["href"])
+
+        if not link_text:
+            continue
+
+        href_lower = href.lower()
+        if not any(ext in href_lower for ext in [".pdf", ".doc", ".docx", "bid_detail"]):
+            continue
+
+        key = normalize_key(link_text)
+        link_map[key] = href
+
+    def extract_date(raw: str) -> Optional[str]:
+        raw_clean = clean_text(raw)
+        match = re.search(
+            r"([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+            raw_clean,
+        )
+        if not match:
+            return None
+        return normalize_date(match.group(1))
+
+    seen = set()
+
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+
+        for row in rows:
+            cells = [
+                clean_text(c.get_text(" ", strip=True))
+                for c in row.find_all(["th", "td"])
+            ]
+
+            if len(cells) != 3:
+                continue
+
+            title, opening_raw, closing_raw = cells
+
+            if title.lower() in ["description", ""]:
+                continue
+
+            # Skip rows without a fixed date. "Open Until Contracted" items can
+            # be stale on this page and are less useful for weekly monitoring.
+            deadline = extract_date(closing_raw)
+            if not deadline:
+                continue
+
+            title_key = normalize_key(title)
+            item_url = link_map.get(title_key, url)
+
+            notice_basis = item_url
+            if item_url == url:
+                notice_basis = f"{title}-{deadline}"
+
+            parsed_path = urlparse(item_url).path
+            notice_id = parsed_path.rsplit("/", 1)[-1] or notice_basis
+            notice_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", notice_id)[:120]
+
+            dedupe_key = (title.lower(), deadline, item_url)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            opp = Opportunity(
+                source=name,
+                notice_id=notice_id,
+                url=item_url,
+                title=title,
+                description=clean_text(
+                    f"Issuer: Town of Fairfax, VT | "
+                    f"Opening date: {opening_raw} | "
+                    f"Closing date: {closing_raw} | "
+                    f"Source page: {url}"
+                ),
+                issuer="Town of Fairfax, VT",
+                posted_date=extract_date(opening_raw),
+                deadline=deadline,
+                state=state,
+            )
+
+            if opp.is_expired():
+                continue
+
+            opportunities.append(opp)
+
+    logger.info(f"Fairfax VT RFP parser: {len(opportunities)} entries parsed")
     return opportunities
 
 
