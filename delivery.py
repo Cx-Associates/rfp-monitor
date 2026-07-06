@@ -102,7 +102,7 @@ def send_email_digest(
     sg = sendgrid.SendGridAPIClient(api_key=api_key)
     all_ok = True
 
-    for recipient in config.EMAIL_TO:
+    for recipient in config.get_email_recipients(monitor_type):
         try:
             msg = Mail(
                 from_email=config.EMAIL_FROM,

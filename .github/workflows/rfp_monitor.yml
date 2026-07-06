@@ -93,21 +93,33 @@ jobs:
           mkdir -p scrapers
           touch scrapers/__init__.py
 
-          CMD="python main.py"
-          CMD="$CMD --mode ${{ github.event.inputs.mode || 'broad' }}"
-          CMD="$CMD --monitor-type ${{ github.event.inputs.monitor_type || 'emv' }}"
-          CMD="$CMD --sources ${{ github.event.inputs.sources || 'all' }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            for MONITOR in emv commissioning; do
+              CMD="python main.py"
+              CMD="$CMD --mode broad"
+              CMD="$CMD --monitor-type $MONITOR"
+              CMD="$CMD --sources all"
 
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            CMD="$CMD --dry-run"
+              echo "Executing scheduled $MONITOR monitor: $CMD"
+              $CMD
+            done
+          else
+            CMD="python main.py"
+            CMD="$CMD --mode ${{ github.event.inputs.mode || 'broad' }}"
+            CMD="$CMD --monitor-type ${{ github.event.inputs.monitor_type || 'emv' }}"
+            CMD="$CMD --sources ${{ github.event.inputs.sources || 'all' }}"
+
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              CMD="$CMD --dry-run"
+            fi
+
+            if [ "${{ github.event.inputs.force_all }}" = "true" ]; then
+              CMD="$CMD --force-all"
+            fi
+
+            echo "Executing manual monitor: $CMD"
+            $CMD
           fi
-
-          if [ "${{ github.event.inputs.force_all }}" = "true" ]; then
-            CMD="$CMD --force-all"
-          fi
-
-          echo "Executing: $CMD"
-          $CMD
 
       - name: Upload dashboard preview artifact
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}

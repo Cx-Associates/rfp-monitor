@@ -966,6 +966,20 @@ EMAIL_TO = [
     "rachael@cx-assoc.com",
     "matt@cx-assoc.com"
 ]
+
+EMAIL_TO_BY_MONITOR = {
+    "emv": EMAIL_TO,
+    "commissioning": [
+        "carrie.napolitan@cx-assoc.com",
+        "cathleen.branon-keogh@cx-assoc.com",
+        "walker@cx-assoc.com",
+        "mike.lacrosse@cx-assoc.com",
+        "matt@cx-assoc.com",
+        "eric@cx-assoc.com",
+        "riazul.hoque@cx-assoc.com",
+    ],
+}
+
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
 # ---------------------------------------------------------------------------
@@ -1060,6 +1074,11 @@ def get_dashboard_url(monitor_type: str = None) -> str:
 def get_email_subject_prefix(monitor_type: str = None) -> str:
     monitor_type = normalize_monitor_type(monitor_type)
     return EMAIL_SUBJECT_PREFIX_BY_MONITOR[monitor_type]
+
+
+def get_email_recipients(monitor_type: str = None) -> list:
+    monitor_type = normalize_monitor_type(monitor_type)
+    return EMAIL_TO_BY_MONITOR[monitor_type]
 
 
 def get_keyword_tiers(monitor_type: str = None) -> dict:
