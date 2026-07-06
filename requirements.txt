@@ -19,3 +19,4 @@ urllib3>=2.0.0           # HTTP connection pooling (used by requests internally)
 # Standard library modules used (no install needed):
 #   json, os, sys, re, hashlib, datetime, logging, argparse
 #   dataclasses, typing, urllib.parse, time
+pypdf

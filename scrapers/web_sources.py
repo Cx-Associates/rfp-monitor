@@ -328,6 +328,8 @@ def _scrape_by_type(
         return _scrape_burlington_electric_rfps(url, name, state)
     elif ptype == "ct_deep_rfp_search":
         return _scrape_ct_deep_rfp_search(url, name, state)
+    elif ptype == "suny_sucf_bid_calendar_pdf":
+        return _scrape_suny_sucf_bid_calendar_pdf(url, name, state)
     elif ptype == "nyscr_contract_reporter":
         return _scrape_nyscr_contract_reporter(url, name, state)
     elif ptype == "neep_rfps":
@@ -1836,6 +1838,145 @@ def _scrape_ct_eeb_rfps(url: str, name: str, state: str) -> List[Opportunity]:
 
     logger.info(f"CT EEB RFP parser: {len(opportunities)} entries parsed")
     return opportunities
+
+
+def _scrape_suny_sucf_bid_calendar_pdf(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape SUNY State University Construction Fund BidCalendar.pdf.
+
+    The PDF text is arranged as repeated project blocks:
+      Campus  ProjectNumber - Project Title
+      Adv Date  Bid Date  Project Size  Consultant...
+
+    This parser keeps the project row and uses the bid date as the deadline.
+    """
+    import re
+    import tempfile
+    from pathlib import Path
+
+    from pypdf import PdfReader
+
+    opportunities: List[Opportunity] = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(resp.content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        reader = PdfReader(str(tmp_path))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    lines = [clean_text(line) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+
+    project_pattern = re.compile(
+        r"^(?P<campus>[A-Za-z][A-Za-z\s&.'/-]+?)\s+"
+        r"(?P<project_no>\d{6}-\d{2})\s*-\s*"
+        r"(?P<title>.+)$"
+    )
+
+    date_pattern = re.compile(
+        r"(?P<adv>[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})[*+]?\s+"
+        r"(?P<bid>[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})[*+]?"
+    )
+
+    as_of = None
+    for line in lines[:10]:
+        m = re.search(r"As of ([A-Z][a-z]+\s+\d{1,2},\s+\d{4})", line)
+        if m:
+            as_of = normalize_date(m.group(1))
+            break
+
+    seen = set()
+
+    for idx, line in enumerate(lines):
+        if "Addendum" in line:
+            continue
+
+        project_match = project_pattern.match(line)
+        if not project_match:
+            continue
+
+        campus = clean_text(project_match.group("campus"))
+        project_no = clean_text(project_match.group("project_no"))
+        project_title = clean_text(project_match.group("title"))
+
+        advertised_date = None
+        bid_date = None
+        project_size = None
+        consultant = None
+
+        lookahead = lines[idx + 1 : idx + 8]
+        for next_line in lookahead:
+            date_match = date_pattern.search(next_line)
+            if not date_match:
+                continue
+
+            advertised_date = normalize_date(date_match.group("adv"))
+            bid_date = normalize_date(date_match.group("bid"))
+
+            after_dates = next_line[date_match.end():].strip()
+            size_match = re.search(r"(\$[\d,]+(?:\s*-\s*\$[\d,]+)?)", after_dates)
+
+            if size_match:
+                project_size = clean_text(size_match.group(1))
+                consultant = clean_text(after_dates[size_match.end():])
+            else:
+                consultant = clean_text(after_dates)
+
+            break
+
+        if not bid_date:
+            continue
+
+        title = f"{campus} - {project_no} - {project_title}"
+        dedupe_key = (project_no, bid_date)
+
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        description_parts = [
+            f"Campus: {campus}",
+            f"Project number: {project_no}",
+            f"Project title: {project_title}",
+            f"Advertised date: {advertised_date or 'not parsed'}",
+            f"Bid date: {bid_date}",
+        ]
+
+        if project_size:
+            description_parts.append(f"Project size: {project_size}")
+        if consultant:
+            description_parts.append(f"Consultant / plan source: {consultant}")
+        if as_of:
+            description_parts.append(f"Bid calendar as of: {as_of}")
+
+        opp = Opportunity(
+            source=name,
+            notice_id=project_no,
+            url=url,
+            title=title,
+            description=clean_text(" | ".join(description_parts)),
+            issuer="State University Construction Fund",
+            posted_date=advertised_date,
+            deadline=bid_date,
+            state=state,
+        )
+
+        if opp.is_expired():
+            continue
+
+        opportunities.append(opp)
+
+    logger.info(f"SUNY SUCF bid calendar parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 def _scrape_nyscr_contract_reporter(url: str, name: str, state: str) -> List[Opportunity]:
     """
