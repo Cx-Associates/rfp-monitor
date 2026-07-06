@@ -338,6 +338,10 @@ def _scrape_by_type(
         return _scrape_efficiency_maine_rfps(url, name, state)
     elif ptype == "nh_energy_rfps":
         return _scrape_nh_energy_rfps(url, name, state)
+    elif ptype == "maine_bgs_business_opportunities":
+        return _scrape_maine_bgs_business_opportunities(url, name, state)
+    elif ptype == "umaine_upcoming_bids":
+        return _scrape_umaine_upcoming_bids(url, name, state)
     elif ptype == "ct_eeb_rfps":
         return _scrape_ct_eeb_rfps(url, name, state)
     elif ptype == "energy_trust_rfps":
@@ -2670,6 +2674,272 @@ def _scrape_vermont_dps_rfps(url: str, name: str, state: str) -> List[Opportunit
 
     logger.info(f"Vermont DPS dedicated parser: {len(opportunities)} entries parsed")
     return opportunities
+
+
+
+def _extract_first_date(text: str) -> str:
+    """Extract the first common date pattern from a text blob."""
+    text = clean_text(text or "")
+
+    patterns = [
+        r"\d{4}/\d{1,2}/\d{1,2}",
+        r"\d{1,2}/\d{1,2}/\d{4}",
+        r"\d{1,2}-[A-Za-z]{3}-\d{4}",
+        r"[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return normalize_date(match.group(0))
+
+    return normalize_date(text)
+
+
+def _scrape_maine_bgs_business_opportunities(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Maine Bureau of General Services business opportunities.
+
+    The page has multiple structured tables for prequalification, IFB, RFP,
+    RFQ, and related public-improvement procurement items. The generic parser
+    captures too many support documents as separate opportunities, so this
+    parser emits one opportunity per table row.
+    """
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    opportunities: List[Opportunity] = []
+    seen = set()
+
+    skip_link_terms = [
+        "addendum",
+        "addenda",
+        "bid result",
+        "bid tab",
+        "sign in",
+        "sign-in",
+        "join bid opening",
+        "teams.microsoft",
+        "mailto:",
+    ]
+
+    for table in soup.find_all("table"):
+        header_row = table.find("tr")
+        if not header_row:
+            continue
+
+        headers = [
+            clean_text(cell.get_text(" ", strip=True)).lower()
+            for cell in header_row.find_all(["th", "td"])
+        ]
+
+        if not headers or not any("project title" in h for h in headers):
+            continue
+
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+
+            values = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+            data = {}
+            for i, header in enumerate(headers):
+                if i < len(values):
+                    data[header] = values[i]
+
+            title = (
+                data.get("project title")
+                or data.get("title")
+                or ""
+            ).strip()
+
+            if not title:
+                continue
+
+            location = data.get("project location", "")
+            contracting_entity = data.get("contracting entity", "")
+            project_info = (
+                data.get("project information")
+                or data.get("project information / exhibits")
+                or ""
+            )
+            document_number = data.get("document number", "")
+            due_text = (
+                data.get("due date")
+                or data.get("due date / time")
+                or ""
+            )
+            closing_time = (
+                data.get("closing time")
+                or data.get("due time")
+                or ""
+            )
+
+            awarded = data.get("awarded contractor", "")
+            if awarded:
+                continue
+
+            deadline = _extract_first_date(due_text)
+            if not deadline:
+                continue
+
+            primary_label = ""
+            primary_href = ""
+            for a in row.find_all("a", href=True):
+                label = clean_text(a.get_text(" ", strip=True))
+                href = urllib.parse.urljoin(url, a["href"])
+                combined = f"{label} {href}".lower()
+                if any(term in combined for term in skip_link_terms):
+                    continue
+                primary_label = label
+                primary_href = href
+                break
+
+            opp_url = primary_href or url
+            notice_id = document_number or hashlib.md5(
+                f"{name}|{title}|{location}|{deadline}".encode("utf-8")
+            ).hexdigest()[:12]
+
+            key = (notice_id, title, deadline)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            description_parts = [
+                f"Project title: {title}",
+                f"Project location: {location}" if location else "",
+                f"Contracting entity: {contracting_entity}" if contracting_entity else "",
+                f"Project information: {project_info}" if project_info else "",
+                f"Document number: {document_number}" if document_number else "",
+                f"Due date: {due_text}" if due_text else "",
+                f"Closing time: {closing_time}" if closing_time else "",
+                f"Primary document: {primary_label}" if primary_label else "",
+            ]
+
+            opp = Opportunity(
+                source=name,
+                notice_id=notice_id,
+                url=opp_url,
+                title=title,
+                description=" | ".join(part for part in description_parts if part),
+                issuer=contracting_entity or "Maine Bureau of General Services",
+                posted_date=None,
+                deadline=deadline,
+                state=state,
+            )
+
+            if opp.is_expired():
+                continue
+
+            opportunities.append(opp)
+
+    logger.info(f"Maine BGS business opportunities parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+
+def _scrape_umaine_upcoming_bids(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape University of Maine System upcoming bids.
+
+    The page has a structured table with bid number, due date, commodity,
+    attachments, and addenda. This parser emits one opportunity per bid row.
+    """
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    opportunities: List[Opportunity] = []
+    seen = set()
+
+    for table in soup.find_all("table"):
+        header_row = table.find("tr")
+        if not header_row:
+            continue
+
+        headers = [
+            clean_text(cell.get_text(" ", strip=True)).lower()
+            for cell in header_row.find_all(["th", "td"])
+        ]
+
+        if not headers or "bid #" not in headers:
+            continue
+
+        for row in table.find_all("tr")[1:]:
+            cells = row.find_all("td")
+            if len(cells) < 4:
+                continue
+
+            values = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+            data = {}
+            for i, header in enumerate(headers):
+                if i < len(values):
+                    data[header] = values[i]
+
+            bid_no = data.get("bid #", "")
+            due_date_text = data.get("due date", "")
+            due_time = data.get("due time", "")
+            commodity = data.get("commodity", "")
+
+            if not commodity:
+                continue
+
+            deadline = _extract_first_date(due_date_text)
+            if not deadline:
+                continue
+
+            primary_href = ""
+            primary_label = ""
+            for a in row.find_all("a", href=True):
+                label = clean_text(a.get_text(" ", strip=True))
+                href = urllib.parse.urljoin(url, a["href"])
+                if "addendum" in label.lower():
+                    continue
+                primary_label = label
+                primary_href = href
+                break
+
+            opp_url = primary_href or url
+            notice_id = bid_no or hashlib.md5(
+                f"{name}|{commodity}|{deadline}".encode("utf-8")
+            ).hexdigest()[:12]
+
+            key = (notice_id, commodity, deadline)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            description_parts = [
+                f"Bid number: {bid_no}" if bid_no else "",
+                f"Commodity: {commodity}",
+                f"Due date: {due_date_text}" if due_date_text else "",
+                f"Due time: {due_time}" if due_time else "",
+                f"Attachments: {data.get('attachments', '')}" if data.get("attachments") else "",
+                f"Addenda: {data.get('addenda', '')}" if data.get("addenda") else "",
+                f"Primary document: {primary_label}" if primary_label else "",
+            ]
+
+            opp = Opportunity(
+                source=name,
+                notice_id=notice_id,
+                url=opp_url,
+                title=commodity,
+                description=" | ".join(part for part in description_parts if part),
+                issuer="University of Maine System",
+                posted_date=None,
+                deadline=deadline,
+                state=state,
+            )
+
+            if opp.is_expired():
+                continue
+
+            opportunities.append(opp)
+
+    logger.info(f"University of Maine upcoming bids parser: {len(opportunities)} entries parsed")
+    return opportunities
+
+
 
 def _scrape_vt_bgs_opc_bids(url: str, name: str, state: str) -> List[Opportunity]:
     """

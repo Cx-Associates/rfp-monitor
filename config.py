@@ -885,6 +885,27 @@ DIRECT_SCRAPE_STATES = [
         ),
     },
     {
+        "name": "Maine BGS Business Opportunities",
+        "state": "ME",
+        "url": "https://www.maine.gov/dafs/bgs/business-opportunities",
+        "type": "maine_bgs_business_opportunities",
+        "notes": (
+            "Maine Bureau of General Services business opportunities page. "
+            "Includes construction IFBs, RFPs, RFQs, pre-bid information, "
+            "and public improvement procurement documents."
+        ),
+    },
+    {
+        "name": "University of Maine System Upcoming Bids",
+        "state": "ME",
+        "url": "https://www.maine.edu/strategic-procurement/upcoming-bids/",
+        "type": "umaine_upcoming_bids",
+        "notes": (
+            "University of Maine System strategic procurement upcoming bids page. "
+            "Structured table with active RFPs and due dates."
+        ),
+    },
+    {
         "name": "Connecticut Energy Efficiency Board RFPs",
         "state": "CT",
         "url": "https://www.energizect.com/connecticut-energy-efficiency-board/rfps",
