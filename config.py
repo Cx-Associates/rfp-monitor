@@ -371,6 +371,11 @@ COMMISSIONING_KEYWORDS_TERTIARY = [
     "chiller replacement",
     "boiler replacement",
     "heating plant",
+    "heating and electrical systems",
+    "heating systems assessment",
+    "electrical systems assessment",
+    "mechanical systems assessment",
+    "systems assessment",
     "cooling plant",
     "central plant",
     "chiller plant",
@@ -882,6 +887,17 @@ DIRECT_SCRAPE_STATES = [
             "NH Department of Energy/Public Utilities Commission RFP page. "
             "Uses a dedicated parser because each RFP heading includes support "
             "documents such as Q&A, proposals received, and rankings."
+        ),
+    },
+    {
+        "name": "Maine Municipal Association RFPs",
+        "state": "ME",
+        "url": "https://www.memun.org/bids-proposals",
+        "type": "maine_municipal_association_rfps",
+        "notes": (
+            "Maine Municipal Association member RFPs, bids, and proposals board. "
+            "Includes municipal building, construction, architectural, engineering, "
+            "mechanical services, and energy-audit opportunities."
         ),
     },
     {

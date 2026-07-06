@@ -36,6 +36,7 @@ import urllib.parse
 from typing import List, Optional
 import re
 import json
+import hashlib
 
 import requests
 from bs4 import BeautifulSoup
@@ -338,6 +339,8 @@ def _scrape_by_type(
         return _scrape_efficiency_maine_rfps(url, name, state)
     elif ptype == "nh_energy_rfps":
         return _scrape_nh_energy_rfps(url, name, state)
+    elif ptype == "maine_municipal_association_rfps":
+        return _scrape_maine_municipal_association_rfps(url, name, state)
     elif ptype == "maine_bgs_business_opportunities":
         return _scrape_maine_bgs_business_opportunities(url, name, state)
     elif ptype == "umaine_upcoming_bids":
@@ -2694,6 +2697,228 @@ def _extract_first_date(text: str) -> str:
             return normalize_date(match.group(0))
 
     return normalize_date(text)
+
+
+
+
+def _extract_mma_field(text: str, label: str, next_labels: list) -> str:
+    """
+    Extract a labeled field from MMA detail-page text.
+
+    Excludes the current label from the lookahead so the regex does not
+    accidentally self-terminate when labels repeat in page boilerplate.
+    """
+    text = clean_text(text or "")
+    following_labels = [x for x in next_labels if x.lower() != label.lower()]
+    pattern = re.escape(label) + r"\s*:\s*(.*?)\s*(?=" + "|".join(
+        re.escape(next_label) + r"\s*:" for next_label in following_labels
+    ) + r"|$)"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    return clean_text(match.group(1)) if match else ""
+
+
+def _trim_mma_detail_text(text: str, title: str) -> str:
+    """
+    Remove most MMA navigation boilerplate and keep the opportunity-specific block.
+    """
+    text = clean_text(text or "")
+
+    # The reliable opportunity block starts after this breadcrumb.
+    marker = "Home / Bids & Proposals"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+
+    # If the breadcrumb approach fails, fall back to the second occurrence of the title.
+    elif title and title in text:
+        parts = text.split(title)
+        if len(parts) >= 3:
+            text = f"{title} {parts[2]}"
+        else:
+            text = f"{title} {parts[-1]}"
+
+    stop_markers = [
+        "Print Search Bids & Proposals:",
+        "Search Bids & Proposals:",
+        "Browse RFPs, Bids & Proposals:",
+        "Categories 3 RSS",
+    ]
+
+    for marker in stop_markers:
+        if marker in text:
+            text = text.split(marker, 1)[0]
+
+    return clean_text(text)
+
+
+def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape Maine Municipal Association member RFPs, bids, and proposals.
+
+    MMA exposes listing/category pages with detail URLs under /Bids-Proposals/.
+    Detail pages contain labeled fields including Start Date, End Date, Type,
+    Phone, Email, and the opportunity body text. This parser emits one
+    opportunity per detail page.
+    """
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    seed_urls = [
+        url,
+        "https://www.memun.org/Bids-Proposals/category/building-construction",
+        "https://www.memun.org/Bids-Proposals/category/architectural",
+        "https://www.memun.org/Bids-Proposals/category/engineering",
+        "https://www.memun.org/Bids-Proposals/category/mechanical-services",
+        "https://www.memun.org/Bids-Proposals/category/environmental",
+    ]
+
+    detail_urls = []
+    seen_urls = set()
+
+    excluded_path_parts = [
+        "/category/",
+        "/rss/",
+        "/Registration",
+        "/Login",
+    ]
+
+    excluded_titles = {
+        "browse rfps",
+        "member rfps, bids & proposals",
+        "bids & proposals",
+        "read more",
+        "rss",
+        "expand/collapse",
+    }
+
+    for seed_url in seed_urls:
+        try:
+            response = requests.get(seed_url, headers=headers, timeout=30)
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning(f"MMA parser: failed to fetch listing {seed_url}: {exc}")
+            continue
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        for a in soup.find_all("a", href=True):
+            link_text = clean_text(a.get_text(" ", strip=True))
+            href = urllib.parse.urljoin(response.url, a["href"])
+            href_l = href.lower()
+
+            if "/bids-proposals/" not in href_l:
+                continue
+            if any(part.lower() in href_l for part in excluded_path_parts):
+                continue
+            if "/pgrid/" in href_l or "/pageid/" in href_l:
+                continue
+            if link_text.lower() in excluded_titles:
+                continue
+            if href.rstrip("/").lower() in {
+                "https://www.memun.org/bids-proposals",
+                "https://www.memun.org/bids-proposals".lower(),
+            }:
+                continue
+
+            if href not in seen_urls:
+                seen_urls.add(href)
+                detail_urls.append(href)
+
+    opportunities: List[Opportunity] = []
+    seen_notice_ids = set()
+
+    labels = [
+        "Start Date",
+        "End Date",
+        "Type",
+        "Phone",
+        "Email",
+        "More Information",
+    ]
+
+    for detail_url in detail_urls:
+        try:
+            response = requests.get(detail_url, headers=headers, timeout=30)
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning(f"MMA parser: failed to fetch detail {detail_url}: {exc}")
+            continue
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        h1s = [
+            clean_text(h.get_text(" ", strip=True))
+            for h in soup.find_all("h1")
+            if clean_text(h.get_text(" ", strip=True))
+        ]
+
+        title = ""
+        for h1 in h1s:
+            if h1.lower() != "rfps, bids & proposals":
+                title = h1
+                break
+
+        if not title:
+            title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
+            title = re.sub(r"^RFPs, Bids & Proposals\s*-\s*", "", title).strip()
+
+        if not title or len(title) < 8:
+            continue
+
+        article = soup.find("article", class_=lambda c: c and "edn_articleDetails" in c)
+        if not article:
+            article = soup.find("article", class_=lambda c: c and "edn_article" in c)
+
+        if article:
+            detail_text = clean_text(article.get_text(" ", strip=True))
+        else:
+            full_text = clean_text(soup.get_text(" ", strip=True))
+            detail_text = _trim_mma_detail_text(full_text, title)
+
+        start_date_raw = _extract_mma_field(detail_text, "Start Date", labels)
+        end_date_raw = _extract_mma_field(detail_text, "End Date", labels)
+        type_raw = _extract_mma_field(detail_text, "Type", labels)
+        phone = _extract_mma_field(detail_text, "Phone", labels)
+        email_raw = _extract_mma_field(detail_text, "Email", labels)
+
+        email_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", email_raw or "", flags=re.IGNORECASE)
+        email = email_match.group(0) if email_match else ""
+
+        deadline = normalize_date(end_date_raw)
+        posted_date = normalize_date(start_date_raw)
+
+        notice_id = hashlib.md5(detail_url.encode("utf-8")).hexdigest()[:12]
+        if notice_id in seen_notice_ids:
+            continue
+        seen_notice_ids.add(notice_id)
+
+        description_parts = [
+            f"Type: {type_raw}" if type_raw else "",
+            f"Start Date: {start_date_raw}" if start_date_raw else "",
+            f"End Date: {end_date_raw}" if end_date_raw else "",
+            detail_text,
+        ]
+
+        opp = Opportunity(
+            source=name,
+            notice_id=notice_id,
+            url=detail_url,
+            title=title,
+            description=" | ".join(part for part in description_parts if part),
+            issuer="Maine Municipal Association",
+            posted_date=posted_date,
+            deadline=deadline,
+            state=state,
+            contact_email=email or None,
+            contact_phone=phone or None,
+        )
+
+        if opp.is_expired():
+            continue
+
+        opportunities.append(opp)
+
+    logger.info(f"Maine Municipal Association parser: {len(opportunities)} entries parsed")
+    return opportunities
+
 
 
 def _scrape_maine_bgs_business_opportunities(url: str, name: str, state: str) -> List[Opportunity]:
