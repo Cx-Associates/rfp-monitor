@@ -44,6 +44,13 @@ from datetime import datetime
 
 import config
 from models import Opportunity, clean_text, normalize_date
+from source_health import (
+    HEALTH_ERROR_EXCEPTION,
+    HEALTH_OK_NONZERO,
+    HEALTH_WARN_SKIPPED_JS,
+    HEALTH_WARN_ZERO,
+    record_source_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +92,39 @@ def fetch_utility_sources() -> List[Opportunity]:
 
         if js_render:
             logger.info(f"Skipping (JS-rendered, Phase 2): {name}")
+            record_source_health(
+                source_name=name,
+                source_group="Utility / Quasi-Public Sources",
+                code=HEALTH_WARN_SKIPPED_JS,
+                candidate_count=None,
+                message="Skipped because source is marked js_render=True / Phase 2.",
+            )
             continue
 
         logger.info(f"Scraping utility source: {name}")
         try:
             opps = _scrape_by_type(url, ptype, name, state)
             logger.info(f"  {name}: {len(opps)} candidates")
+            record_source_health(
+                source_name=name,
+                source_group="Utility / Quasi-Public Sources",
+                code=HEALTH_OK_NONZERO if len(opps) > 0 else HEALTH_WARN_ZERO,
+                candidate_count=len(opps),
+                message=(
+                    "Source returned candidates."
+                    if len(opps) > 0
+                    else "Source completed but returned 0 candidates."
+                ),
+            )
             all_opps.extend(opps)
         except Exception as e:
+            record_source_health(
+                source_name=name,
+                source_group="Utility / Quasi-Public Sources",
+                code=HEALTH_ERROR_EXCEPTION,
+                candidate_count=None,
+                message=f"{type(e).__name__}: {e}",
+            )
             logger.warning(f"  {name}: failed ({type(e).__name__}: {e})")
 
         time.sleep(config.REQUEST_DELAY_SECONDS)
@@ -102,8 +134,26 @@ def fetch_utility_sources() -> List[Opportunity]:
     try:
         naseo_opps = fetch_naseo()
         logger.info(f"  NASEO: {len(naseo_opps)} candidates")
+        record_source_health(
+            source_name="NASEO",
+            source_group="Utility / Quasi-Public Sources",
+            code=HEALTH_OK_NONZERO if len(naseo_opps) > 0 else HEALTH_WARN_ZERO,
+            candidate_count=len(naseo_opps),
+            message=(
+                "Source returned candidates."
+                if len(naseo_opps) > 0
+                else "Source completed but returned 0 candidates."
+            ),
+        )
         all_opps.extend(naseo_opps)
     except Exception as e:
+        record_source_health(
+            source_name="NASEO",
+            source_group="Utility / Quasi-Public Sources",
+            code=HEALTH_ERROR_EXCEPTION,
+            candidate_count=None,
+            message=f"{type(e).__name__}: {e}",
+        )
         logger.warning(f"  NASEO: failed ({type(e).__name__}: {e})")
 
     logger.info(f"Utility sources total: {len(all_opps)} candidates")
@@ -132,8 +182,26 @@ def fetch_direct_scrape_states() -> List[Opportunity]:
         try:
             opps = _scrape_by_type(url, ptype, name, state)
             logger.info(f"  {name}: {len(opps)} candidates")
+            record_source_health(
+                source_name=name,
+                source_group="Priority State Portals (direct)",
+                code=HEALTH_OK_NONZERO if len(opps) > 0 else HEALTH_WARN_ZERO,
+                candidate_count=len(opps),
+                message=(
+                    "Source returned candidates."
+                    if len(opps) > 0
+                    else "Source completed but returned 0 candidates."
+                ),
+            )
             all_opps.extend(opps)
         except Exception as e:
+            record_source_health(
+                source_name=name,
+                source_group="Priority State Portals (direct)",
+                code=HEALTH_ERROR_EXCEPTION,
+                candidate_count=None,
+                message=f"{type(e).__name__}: {e}",
+            )
             logger.warning(f"  {name}: failed ({type(e).__name__}: {e})")
 
         time.sleep(config.REQUEST_DELAY_SECONDS)

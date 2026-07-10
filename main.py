@@ -145,8 +145,25 @@ def run_scrapers(source_str: str) -> List:
         try:
             results = fetch_fn()
             logger.info(f"{label}: {len(results)} raw opportunities returned")
+            if len(results) == 0:
+                from source_health import HEALTH_WARN_TOTAL_ZERO, record_source_health
+                record_source_health(
+                    source_name=label,
+                    source_group=label,
+                    code=HEALTH_WARN_TOTAL_ZERO,
+                    candidate_count=0,
+                    message="Entire source group returned 0 candidates.",
+                )
             raw_opps.extend(results)
         except Exception as e:
+            from source_health import HEALTH_ERROR_EXCEPTION, record_source_health
+            record_source_health(
+                source_name=label,
+                source_group=label,
+                code=HEALTH_ERROR_EXCEPTION,
+                candidate_count=None,
+                message=f"Unhandled source group exception: {type(e).__name__}: {e}",
+            )
             logger.error(
                 f"{label}: unhandled exception ({type(e).__name__}: {e})",
                 exc_info=True,
@@ -300,12 +317,18 @@ def main():
             f"and manual-review candidates."
         )
         if not args.dry_run:
-            from delivery import generate_dashboard
+            from delivery import generate_dashboard, send_source_health_email
+            from source_health import get_source_health_records
+
             generate_dashboard(
                 [],
                 dashboard_opps,
                 mode=mode,
                 manual_review=manual_review,
+                monitor_type=monitor_type,
+            )
+            send_source_health_email(
+                get_source_health_records(),
                 monitor_type=monitor_type,
             )
         sys.exit(0)
@@ -347,9 +370,14 @@ def main():
     # -------------------------------------------------------------------------
     # Step 6: Deliver
     # -------------------------------------------------------------------------
-    from delivery import send_email_digest, generate_dashboard
+    from delivery import send_email_digest, generate_dashboard, send_source_health_email
+    from source_health import get_source_health_records
 
     email_ok    = send_email_digest(new_opps, mode=mode, monitor_type=monitor_type)
+    health_email_ok = send_source_health_email(
+        get_source_health_records(),
+        monitor_type=monitor_type,
+    )
     dashboard_ok = generate_dashboard(
         new_opps,
         dashboard_opps,
@@ -360,6 +388,7 @@ def main():
 
     logger.info(
         f"Delivery: email={'OK' if email_ok else 'FAILED'} | "
+        f"source_health_email={'OK' if health_email_ok else 'FAILED'} | "
         f"dashboard={'OK' if dashboard_ok else 'FAILED'}"
     )
 

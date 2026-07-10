@@ -28,6 +28,179 @@ from models import Opportunity
 logger = logging.getLogger(__name__)
 
 
+def send_source_health_email(
+    health_records,
+    monitor_type: str = None,
+) -> bool:
+    """
+    Send a separate source-health report email after each non-dry monitor run.
+
+    This is intentionally independent from opportunity delivery and does not
+    affect deduplication, dashboard generation, or seen-set updates.
+    """
+    api_key = os.environ.get(config.SENDGRID_API_KEY_ENV, "").strip()
+    if not api_key:
+        logger.warning(
+            f"{config.SENDGRID_API_KEY_ENV} not set. "
+            f"Skipping source health email."
+        )
+        return False
+
+    try:
+        import sendgrid
+        from sendgrid.helpers.mail import Mail
+    except ImportError:
+        logger.error(
+            "sendgrid package not installed. "
+            "Add 'sendgrid>=6.11.0' to requirements.txt."
+        )
+        return False
+
+    from source_health import summarize_source_health
+
+    monitor_type = config.normalize_monitor_type(monitor_type)
+    monitor_label = config.get_monitor_label(monitor_type)
+    run_date = datetime.utcnow().strftime("%B %d, %Y")
+    summary = summarize_source_health(health_records)
+
+    error_count = summary.get("HEALTH_ERROR_EXCEPTION", 0)
+    warn_count = (
+        summary.get("HEALTH_WARN_ZERO", 0)
+        + summary.get("HEALTH_WARN_SKIPPED_JS", 0)
+        + summary.get("HEALTH_WARN_TOTAL_ZERO", 0)
+    )
+    ok_count = summary.get("HEALTH_OK_NONZERO", 0)
+
+    subject = (
+        f"[CxA RFP Monitor Health] {monitor_label} source report - "
+        f"{run_date} ({error_count} errors, {warn_count} warnings)"
+    )
+    html_body = _render_source_health_email(
+        health_records=health_records,
+        monitor_label=monitor_label,
+        run_date=run_date,
+        ok_count=ok_count,
+        warn_count=warn_count,
+        error_count=error_count,
+    )
+
+    sg = sendgrid.SendGridAPIClient(api_key=api_key)
+    all_ok = True
+
+    for recipient in config.SOURCE_HEALTH_EMAIL_TO:
+        try:
+            msg = Mail(
+                from_email=config.EMAIL_FROM,
+                to_emails=recipient,
+                subject=subject,
+                html_content=html_body,
+            )
+            response = sg.client.mail.send.post(request_body=msg.get())
+
+            if response.status_code == 202:
+                logger.info(f"Source health email sent to {recipient}")
+            else:
+                logger.warning(
+                    f"Unexpected SendGrid status {response.status_code} "
+                    f"for source health recipient {recipient}"
+                )
+                all_ok = False
+
+        except Exception as e:
+            logger.error(f"Source health email to {recipient} failed: {e}")
+            all_ok = False
+
+    return all_ok
+
+
+def _render_source_health_email(
+    health_records,
+    monitor_label: str,
+    run_date: str,
+    ok_count: int,
+    warn_count: int,
+    error_count: int,
+) -> str:
+    def esc(value) -> str:
+        return (
+            str(value or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    def badge_style(code: str) -> str:
+        if code == "HEALTH_ERROR_EXCEPTION":
+            return "background:#c62828;color:#fff;"
+        if code in ["HEALTH_WARN_ZERO", "HEALTH_WARN_SKIPPED_JS", "HEALTH_WARN_TOTAL_ZERO"]:
+            return "background:#e65100;color:#fff;"
+        return "background:#2e7d32;color:#fff;"
+
+    grouped = {}
+    for record in health_records:
+        grouped.setdefault(record.source_group, []).append(record)
+
+    sections = []
+    for group_name, records in grouped.items():
+        rows = []
+        for record in records:
+            count = "" if record.candidate_count is None else record.candidate_count
+            rows.append(f"""
+              <tr>
+                <td style="padding:6px 8px;border-bottom:1px solid #eee;">{esc(record.source_name)}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid #eee;">
+                  <span style="{badge_style(record.code)}font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;">
+                    {esc(record.code)}
+                  </span>
+                </td>
+                <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">{esc(count)}</td>
+                <td style="padding:6px 8px;border-bottom:1px solid #eee;">{esc(record.message)}</td>
+              </tr>
+            """)
+
+        sections.append(f"""
+          <h3 style="font-size:15px;color:#1a1a2e;margin:18px 0 8px 0;">{esc(group_name)}</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px 8px;background:#f0f2f5;">Source</th>
+                <th style="text-align:left;padding:6px 8px;background:#f0f2f5;">Health code</th>
+                <th style="text-align:right;padding:6px 8px;background:#f0f2f5;">Count</th>
+                <th style="text-align:left;padding:6px 8px;background:#f0f2f5;">Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(rows)}
+            </tbody>
+          </table>
+        """)
+
+    return f"""<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;background:#f5f5f5;color:#333;">
+  <div style="background:#1a1a2e;color:#fff;padding:18px 22px;border-radius:6px 6px 0 0;">
+    <h1 style="margin:0;font-size:20px;">CxA RFP Monitor Source Health</h1>
+    <p style="margin:4px 0 0 0;font-size:13px;opacity:.8;">{esc(monitor_label)} &mdash; {esc(run_date)}</p>
+  </div>
+  <div style="background:#fff;padding:18px 22px;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;">
+    <p style="font-size:13px;margin:0 0 14px 0;">
+      <strong>{ok_count}</strong> OK &nbsp;|&nbsp;
+      <strong>{warn_count}</strong> warnings &nbsp;|&nbsp;
+      <strong>{error_count}</strong> errors
+    </p>
+    <p style="font-size:12px;color:#666;margin:0 0 14px 0;">
+      Codes: HEALTH_OK_NONZERO = source returned candidates;
+      HEALTH_WARN_ZERO = source returned 0 candidates;
+      HEALTH_WARN_SKIPPED_JS = source skipped because JS-rendered / Phase 2;
+      HEALTH_ERROR_EXCEPTION = source threw exception;
+      HEALTH_WARN_TOTAL_ZERO = entire source group returned 0.
+    </p>
+    {''.join(sections)}
+  </div>
+</body>
+</html>"""
+
+
 # ===========================================================================
 # 1. EMAIL DELIVERY (SendGrid)
 # ===========================================================================

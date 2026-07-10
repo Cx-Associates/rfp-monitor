@@ -990,6 +990,12 @@ EMAIL_TO_BY_MONITOR = {
     ],
 }
 
+SOURCE_HEALTH_EMAIL_TO = [
+    "riazul.hoque@cx-assoc.com",
+    "liza.boyle@cx-assoc.com",
+    "eric@cx-assoc.com",
+]
+
 EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
 
 # ---------------------------------------------------------------------------
