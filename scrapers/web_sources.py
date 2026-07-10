@@ -401,6 +401,8 @@ def _scrape_by_type(
         return _scrape_suny_sucf_bid_calendar_pdf(url, name, state)
     elif ptype == "nyscr_contract_reporter":
         return _scrape_nyscr_contract_reporter(url, name, state)
+    elif ptype == "nyserda_current_funding":
+        return _scrape_nyserda_current_funding(url, name, state)
     elif ptype == "neep_rfps":
         return _scrape_neep_rfps(url, name, state)
     elif ptype == "efficiency_maine_rfps":
@@ -426,6 +428,288 @@ def _scrape_by_type(
     else:
         # Default: generic link scraper
         return _scrape_generic_rfp_page(url, name, state)
+
+
+def _nyserda_clean_html(value) -> str:
+    """Clean NYSERDA API text fields that may contain HTML fragments."""
+    if value is None:
+        return ""
+    text = str(value)
+    if "<" in text and ">" in text:
+        text = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
+    return clean_text(text, max_length=2000)
+
+
+def _nyserda_first_value(item: dict, keys: list[str]) -> str:
+    """Return the first non-empty value from a list of possible NYSERDA field names."""
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, "", []):
+            return str(value).strip()
+    return ""
+
+
+def _nyserda_normalize_due_date(value: str) -> Optional[str]:
+    """
+    Normalize NYSERDA due date strings.
+
+    NYSERDA often returns strings like:
+      Due Date: 12/31/2030
+      Due Date: 7/27/2022 (Round 1); 6/6/2024 (Round 2); 8/18/2026 (Round 3);
+      Due Date: Open Until Further Notice
+
+    For multi-round solicitations, use the next future date when available.
+    """
+    if not value:
+        return None
+
+    text = clean_text(str(value), max_length=1000)
+    direct = normalize_date(text)
+    if direct:
+        return direct
+
+    import re
+    from datetime import date, datetime
+
+    date_matches = re.findall(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", text)
+    parsed_dates = []
+
+    for raw in date_matches:
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                parsed_dates.append(datetime.strptime(raw, fmt).date())
+                break
+            except ValueError:
+                continue
+
+    if not parsed_dates:
+        return None
+
+    today = date.today()
+    future_dates = sorted(d for d in parsed_dates if d >= today)
+
+    if future_dates:
+        return future_dates[0].isoformat()
+
+    return max(parsed_dates).isoformat()
+
+
+def _extract_nyserda_data_source_id(html: str) -> Optional[str]:
+    """
+    Extract the Sitecore dataSourceId used by NYSERDA's funding opportunities API.
+
+    The current page is Vue-rendered. The static HTML includes a small inline
+    fundingOpportunities object, and FundingOpportunities.js calls:
+
+      /rapi/fundingopportunitiesapi/getfundingopportunities?dataSourceId=...
+    """
+    patterns = [
+        r"dataSourceId\s*:\s*['\"]([^'\"]+)['\"]",
+        r'"dataSourceId"\s*:\s*"([^"]+)"',
+        r"data-source-id\s*=\s*['\"]([^'\"]+)['\"]",
+        r"dataSourceId\s*=\s*['\"]([^'\"]+)['\"]",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+    return None
+
+
+def _scrape_nyserda_current_funding(url: str, name: str, state: str) -> List[Opportunity]:
+    """
+    Scrape NYSERDA current solicitations and funding opportunities.
+
+    NYSERDA's current page is Vue-rendered. The visible opportunity data is
+    loaded from a JSON endpoint rather than normal static links, so the generic
+    scraper captures navigation and historical PDF links. This parser:
+      1. fetches the current funding page;
+      2. extracts the page dataSourceId;
+      3. calls the NYSERDA funding opportunities API;
+      4. creates one Opportunity per current PON/RFP/RFI/RFQ/RFQL listing.
+    """
+    html = _fetch_page(url)
+    if not html:
+        return []
+
+    data_source_id = _extract_nyserda_data_source_id(html)
+    if not data_source_id:
+        logger.warning("NYSERDA: could not find dataSourceId on current funding page")
+        return []
+
+    api_url = urllib.parse.urljoin(
+        url,
+        "/rapi/fundingopportunitiesapi/getfundingopportunities",
+    )
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": url,
+    }
+
+    try:
+        response = requests.get(
+            api_url,
+            params={"dataSourceId": data_source_id},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.warning(f"NYSERDA: API request failed ({type(exc).__name__}: {exc})")
+        return []
+
+    sections = (
+        payload.get("FundingOpportunities")
+        or payload.get("fundingOpportunities")
+        or payload.get("Sections")
+        or payload.get("sections")
+        or []
+    )
+
+    if isinstance(sections, dict):
+        sections = [sections]
+
+    opportunities = []
+    seen_keys = set()
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+
+        section_title = _nyserda_clean_html(
+            section.get("SectionTitle")
+            or section.get("Title")
+            or section.get("Name")
+            or ""
+        )
+
+        # Avoid archived/closed sections if NYSERDA ever includes them in the API response.
+        section_l = section_title.lower()
+        if any(term in section_l for term in ["archive", "archived", "closed", "past"]):
+            continue
+
+        items = (
+            section.get("FundingOpportunities")
+            or section.get("fundingOpportunities")
+            or section.get("Opportunities")
+            or section.get("Items")
+            or []
+        )
+
+        if isinstance(items, dict):
+            items = [items]
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            solicitation_name = _nyserda_clean_html(_nyserda_first_value(item, [
+                "SolicitationName",
+                "Name",
+                "Title",
+                "ProgramName",
+            ]))
+
+            solicitation_number = _nyserda_clean_html(_nyserda_first_value(item, [
+                "SolicitationNumber",
+                "FundingOpportunityNumber",
+                "OpportunityNumber",
+                "RfpNumber",
+                "RFPNumber",
+                "PonNumber",
+                "PONNumber",
+                "Number",
+            ]))
+
+            if not solicitation_name and not solicitation_number:
+                continue
+
+            solicitation_type = _nyserda_clean_html(_nyserda_first_value(item, [
+                "SolicitationType",
+                "OpportunityType",
+                "FundingType",
+                "Type",
+            ]))
+
+            short_description = _nyserda_clean_html(_nyserda_first_value(item, [
+                "ShortDescription",
+                "Description",
+                "Summary",
+                "ProgramSummary",
+            ]))
+
+            due_date_text = _nyserda_clean_html(_nyserda_first_value(item, [
+                "DueDateString",
+                "DueDate",
+                "ApplicationDueDate",
+                "CloseDate",
+                "ClosingDate",
+                "Deadline",
+            ]))
+            deadline = _nyserda_normalize_due_date(due_date_text)
+
+            raw_link = _nyserda_first_value(item, [
+                "Url",
+                "URL",
+                "Link",
+                "WebpageUrl",
+                "WebpageURL",
+                "SolicitationUrl",
+                "SolicitationURL",
+                "MoreInfoUrl",
+                "MoreInfoURL",
+                "DetailUrl",
+                "DetailURL",
+                "Path",
+            ])
+
+            detail_url = urllib.parse.urljoin(url, raw_link) if raw_link else url
+
+            title_parts = []
+            if solicitation_number:
+                title_parts.append(solicitation_number)
+            if solicitation_name:
+                title_parts.append(solicitation_name)
+
+            title = " - ".join(title_parts)
+            if solicitation_type and solicitation_type.lower() not in title.lower():
+                title = f"{solicitation_type}: {title}"
+
+            description_bits = []
+            if section_title:
+                description_bits.append(f"Section: {section_title}")
+            if solicitation_type:
+                description_bits.append(f"Type: {solicitation_type}")
+            if due_date_text:
+                description_bits.append(f"Due date: {due_date_text}")
+            if short_description:
+                description_bits.append(short_description)
+
+            description = clean_text(" | ".join(description_bits), max_length=2000)
+
+            unique_key = solicitation_number or detail_url or title
+            if unique_key in seen_keys:
+                continue
+            seen_keys.add(unique_key)
+
+            opportunities.append(Opportunity(
+                source=name,
+                notice_id=unique_key,
+                url=detail_url,
+                title=clean_text(title, max_length=300),
+                description=description or clean_text(title, max_length=1000),
+                issuer="NYSERDA",
+                state=state or "NY",
+                deadline=deadline,
+            ))
+
+    logger.info(f"NYSERDA current funding parser: {len(opportunities)} entries parsed")
+    return opportunities
 
 
 def _scrape_vsigns(url: str, name: str, state: str) -> List[Opportunity]:

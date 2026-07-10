@@ -539,10 +539,15 @@ UTILITY_SOURCES = [
     # --- New England utilities ---
     {
         "name": "NYSERDA",
-        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Requests-for-Proposals",
+        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Current-Funding-Opportunities",
+        "state": "NY",
+        "type": "nyserda_current_funding",
         "js_render": False,
         "active": True,
-        "notes": "Top EM&V issuer. Check weekly.",
+        "notes": (
+            "NYSERDA current solicitations and funding opportunities. "
+            "Uses dedicated API-backed parser for PONs, RFPs, RFIs, RFQs, and RFQLs."
+        ),
     },
     {
         "name": "ISO-NE Solicitations",
@@ -748,9 +753,13 @@ DIRECT_SCRAPE_STATES = [
     {
         "name": "NYSERDA Funding (direct)",
         "state": "NY",
-        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Requests-for-Proposals",
-        "type": "generic_list",
-        "notes": "Also covered in UTILITY_SOURCES.",
+        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Current-Funding-Opportunities",
+        "type": "nyserda_current_funding",
+        "active": False,
+        "notes": (
+            "Disabled to avoid duplicate scraping. NYSERDA is actively covered "
+            "in UTILITY_SOURCES using the dedicated nyserda_current_funding parser."
+        ),
     },
     {
         "name": "California CaleProcure",
