@@ -1,4 +1,4 @@
-# CxA RFP Monitor
+﻿# CxA RFP Monitor
 
 Automated scanner for RFP/RFQ/RFI opportunities relevant to Cx Associates. The same codebase currently supports two monitor types:
 
@@ -11,13 +11,13 @@ The monitor runs through GitHub Actions, scrapes configured federal, utility, qu
 
 ## Current Production Behavior
 
-The scheduled production workflow runs every Monday at:
+The scheduled production workflow runs every Monday and Thursday at:
 
 ```text
 57 9 * * 1
 ```
 
-That is Monday at 9:57 UTC. Depending on daylight saving time, this is either 4:57 AM or 5:57 AM Eastern.
+That is Monday and Thursday at 9:57 UTC. Depending on daylight saving time, this is either 4:57 AM or 5:57 AM Eastern.
 
 On scheduled runs, the GitHub Actions workflow runs both monitors sequentially from the same job:
 
@@ -222,30 +222,30 @@ The commissioning threshold is intentionally higher than EM&V broad mode so that
 
 ```text
 rfp-monitor/
-├── main.py                                      # Orchestrator / entry point
-├── config.py                                    # Keywords, sources, thresholds, monitor settings, email settings
-├── models.py                                    # Opportunity dataclass and shared utilities
-├── scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
-├── dedup.py                                     # Supabase deduplication, active cache, and suppression filtering
-├── delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
-├── source_health.py                             # In-memory source-health records and health-code summary
-├── requirements.txt                             # Python dependencies
-├── docs/
-│   ├── index.html                               # Landing page output
-│   ├── emv.html                                 # EM&V dashboard output
-│   └── commissioning.html                       # Commissioning dashboard output
-├── scrapers/
-│   ├── __init__.py
-│   ├── sam_gov.py                               # SAM.gov federal API scraper
-│   ├── web_sources.py                           # Utility/quasi-public and direct state/municipal scrapers
-│   └── google_cse.py                            # Google CSE scraper, currently disabled in main.py
-├── supabase/
-│   └── functions/
-│       └── suppress-manual-review/
-│           └── index.ts                         # Edge Function used by dashboard X button
-└── .github/
-    └── workflows/
-        └── rfp_monitor.yml                      # GitHub Actions workflow
+â”œâ”€â”€ main.py                                      # Orchestrator / entry point
+â”œâ”€â”€ config.py                                    # Keywords, sources, thresholds, monitor settings, email settings
+â”œâ”€â”€ models.py                                    # Opportunity dataclass and shared utilities
+â”œâ”€â”€ scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
+â”œâ”€â”€ dedup.py                                     # Supabase deduplication, active cache, and suppression filtering
+â”œâ”€â”€ delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
+â”œâ”€â”€ source_health.py                             # In-memory source-health records and health-code summary
+â”œâ”€â”€ requirements.txt                             # Python dependencies
+â”œâ”€â”€ docs/
+â”‚   â”œâ”€â”€ index.html                               # Landing page output
+â”‚   â”œâ”€â”€ emv.html                                 # EM&V dashboard output
+â”‚   â””â”€â”€ commissioning.html                       # Commissioning dashboard output
+â”œâ”€â”€ scrapers/
+â”‚   â”œâ”€â”€ __init__.py
+â”‚   â”œâ”€â”€ sam_gov.py                               # SAM.gov federal API scraper
+â”‚   â”œâ”€â”€ web_sources.py                           # Utility/quasi-public and direct state/municipal scrapers
+â”‚   â””â”€â”€ google_cse.py                            # Google CSE scraper, currently disabled in main.py
+â”œâ”€â”€ supabase/
+â”‚   â””â”€â”€ functions/
+â”‚       â””â”€â”€ suppress-manual-review/
+â”‚           â””â”€â”€ index.ts                         # Edge Function used by dashboard X button
+â””â”€â”€ .github/
+    â””â”€â”€ workflows/
+        â””â”€â”€ rfp_monitor.yml                      # GitHub Actions workflow
 ```
 
 ---
@@ -290,7 +290,7 @@ The opportunity digest may be a "No new RFPs this week" email if no new passing 
 Manual runs are available from:
 
 ```text
-GitHub → Actions → CxA RFP Monitor → Run workflow
+GitHub â†’ Actions â†’ CxA RFP Monitor â†’ Run workflow
 ```
 
 | Input | Description |
@@ -847,7 +847,7 @@ supabase functions deploy suppress-manual-review --no-verify-jwt
 Configure these under:
 
 ```text
-GitHub repo → Settings → Secrets and variables → Actions
+GitHub repo â†’ Settings â†’ Secrets and variables â†’ Actions
 ```
 
 | Secret | Purpose |
@@ -1168,7 +1168,7 @@ manual_review_suppressed
 
 9. Confirm the workflow runs successfully from `main`.
 
-10. After the next scheduled Monday run, check:
+10. After the next scheduled Monday/Thursday run, check:
     - both monitor runs executed;
     - EM&V dashboard timestamp updated;
     - commissioning dashboard timestamp updated;
@@ -1345,4 +1345,4 @@ Options:
 - The active dashboard cache is managed by the Python workflow and Supabase.
 - The manual-review X button uses a Supabase Edge Function; secrets are not embedded in static HTML.
 - Source-health email is currently operational but not persistent.
-- The scheduled production workflow must be merged to `main` to affect Monday’s scheduled run.
+- The scheduled production workflow must be merged to `main` to affect Mondayâ€™s scheduled run.
