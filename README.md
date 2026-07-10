@@ -1,91 +1,220 @@
 # CxA RFP Monitor
 
-Automated scanner for EM&V (Evaluation, Measurement & Verification), program evaluation, energy efficiency, and related RFP opportunities across federal, state, utility, and quasi-public sources.
+Automated scanner for RFP/RFQ/RFI opportunities relevant to Cx Associates. The same codebase currently supports two monitor types:
 
-The monitor runs through GitHub Actions and produces two outputs:
+1. **EM&V / Evaluation** (`emv`)
+2. **Commissioning / RCx** (`commissioning`)
 
-1. **Email digest** through SendGrid.
-2. **GitHub Pages dashboard** with a main opportunity table and a collapsed manual-review section.
-
-The main table shows opportunities that pass the scoring threshold. The manual-review section shows filtered below-threshold opportunities that may still be worth occasional human review.
-
-The dashboard also supports:
-
-1. **Active opportunity persistence** through Supabase, so passing opportunities stay visible until their due date, or for 30 days if no due date is available.
-2. **Manual suppression** of manual-review rows. Authorized users can click the X button on a manual-review item, enter the removal token, and permanently hide that item from future dashboard generations.
+The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, and state/municipal sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, and sends separate source-health emails after each non-dry run.
 
 ---
 
-## What It Does
+## Current Production Behavior
 
-Each run:
+The scheduled production workflow runs every Monday at:
 
-1. Queries **SAM.gov** for federal opportunities matching configured keywords and NAICS codes.
-2. Scrapes configured **utility and quasi-public sources**.
-3. Scrapes configured **priority state portals**.
-4. Scores all raw opportunities using tiered keyword matching.
-5. Splits scored opportunities into:
+```text
+57 9 * * 1
+```
 
-   * passing opportunities,
-   * below-threshold manual-review candidates,
-   * all scored opportunities.
-6. Loads the Supabase manual-review suppression table and removes suppressed manual-review rows.
-7. Updates the Supabase active dashboard cache with passing opportunities.
-8. Loads active cached dashboard opportunities that should remain visible.
-9. Merges current passing opportunities with active cached opportunities.
-10. Deduplicates passing opportunities against previously reported records in Supabase.
-11. Sends an email digest for new passing opportunities when email delivery is enabled.
-12. Generates a static GitHub Pages dashboard.
+That is Monday at 9:57 UTC. Depending on daylight saving time, this is either 4:57 AM or 5:57 AM Eastern.
 
-The important distinction is:
+On scheduled runs, the GitHub Actions workflow runs both monitors sequentially from the same job:
 
-* **Email digest** is for newly identified passing opportunities only.
-* **Dashboard** is an active opportunity board. Passing opportunities remain visible until their deadline, or for 30 days from first seen if no deadline is known.
+```bash
+python main.py --mode broad --monitor-type emv --sources all
+python main.py --mode broad --monitor-type commissioning --sources all
+```
+
+Each monitor run is independent. Each run has its own monitor type, keyword set, score thresholds, dashboard output path, opportunity email recipients, source-health records, and Supabase table scope.
 
 ---
 
-## Current Status
+## Outputs
 
-| Feature / Source                   | Status             | Notes                                                                                                                                                                         |
-| ---------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SAM.gov federal scraping           | Working            | Requires `SAM_API_KEY`. Uses keyword and NAICS searches.                                                                                                                      |
-| Supabase deduplication             | Working            | Uses `opportunity_seen` table. Controls whether opportunities are treated as new for email/reporting.                                                                         |
-| Supabase active dashboard cache    | Working            | Uses `opportunity_active` table. Keeps passing opportunities visible until deadline, or for 30 days if no deadline exists.                                                    |
-| Supabase manual-review suppression | Working            | Uses `manual_review_suppressed` table.                                                                                                                                        |
-| Dashboard manual-review X button   | Working            | Calls Supabase Edge Function and writes suppression records.                                                                                                                  |
-| Supabase Edge Function             | Working            | Function name: `suppress-manual-review`.                                                                                                                                      |
-| Email digest via SendGrid          | Working            | Controlled by workflow input for manual runs. Scheduled production run sends the digest.                                                                                      |
-| GitHub Pages dashboard             | Working            | Deploys from `main`; feature branches upload preview artifact only.                                                                                                           |
-| Dashboard manual-review section    | Working            | Shows filtered below-threshold candidates.                                                                                                                                    |
-| NASEO RFP Board                    | Working            | Dedicated parser targets open RFP/RFI section.                                                                                                                                |
-| NEEP                               | Working            | Dedicated parser avoids informational false positives.                                                                                                                        |
-| AESP Active RFPs                   | Working            | Dedicated parser for active RFP/RFQ/RFI listings; expired dated postings are filtered out.                                                                                    |
-| Efficiency Maine                   | Working            | Dedicated parser skips closed/awarded/prequalified postings.                                                                                                                  |
-| VEIC & Efficiency Vermont          | Working            | Uses VEIC RFP page. Efficiency Vermont direct page no longer lists open RFPs.                                                                                                 |
-| Vermont DPS RFP page               | Working            | Dedicated parser and added as Vermont source.                                                                                                                                 |
-| Vermont Business Registry          | Working            | Dedicated parser and added as broader Vermont fallback source.                                                                                                                |
-| Massachusetts COMMBUYS             | Working            | Dedicated parser for current public open-bid HTML.                                                                                                                            |
-| NYSERDA                            | Working            | Included as utility source and direct NY source. Can occasionally time out; run continues.                                                                                    |
-| California CaleProcure             | Working            | Direct scrape source; now prefers a dedicated California Energy Commission contracts parser that filters inactive/expired CEC solicitations before falling back.                 |
-| Green Mountain Power               | Working / noisy    | Generic source; some older PDFs may remain in manual review.                                                                                                                  |
-| Mass Save / EEAC                   | Working            | Generic RFP source.                                                                                                                                                           |
-| DOE EERE Funding Opportunities     | Working            | Broad national source.                                                                                                                                                        |
-| ISO-NE Solicitations               | Working / noisy    | Generic source; some non-RFP links may fall into manual review.                                                                                                               |
-| Entergy RFPs                       | Working            | Dedicated parser skips stale prior-year RFPs.                                                                                                                                 |
-| Energy Trust of Oregon             | Working            | Dedicated parser for contracting opportunities; current RFQ/PER-style opportunities can score as high confidence when evaluation/research terms are present.                   |
-| PG&E Energy Efficiency Solicitations | Working          | Dedicated parser for PG&E energy efficiency third-party solicitations.                                                                                                         |
-| Cape Light Compact RFPs             | Working            | Dedicated parser reads current listing cards and filters non-current/closed listing noise.                                                                                     |
-| Burlington Electric Department RFPs | Working / limited  | Dedicated parser monitors the stable BED listing page and keeps dynamic `/rfpdetail?rfp=...` links; detail pages may be Cloudflare-blocked, so items usually stay manual review. |
-| NYS Contract Reporter               | Working / broad    | Dedicated parser extracts public listing fields from NYSCR text blocks, including CR number, issuer, issue date, due date, category, and ad type; detail pages may require login. |
-| Connecticut DEEP RFP Search         | Working / filtered | Dedicated parser filters CT DEEP search results to energy/RFP-related items and removes pagination, older press releases, public-comment pages, parks/concession noise, and closed/no-award items. |
-| NH Department of Energy RFPs        | Working            | Dedicated parser for NH Department of Energy/Public Utilities Commission RFP page and detail pages.                                                                            |
-| Connecticut Energy Efficiency Board RFPs | Working       | Dedicated parser reads only open RFP/RFQ content from the CT Energy Efficiency Board page.                                                                                     |
-| NYISO Procurement                  | Needs follow-up    | Current configured URL returns 404; left unchanged for now.                                                                                                                   |
-| National Grid                      | Phase 2            | Skipped because source is JavaScript-rendered.                                                                                                                                |
-| Avangrid / United Illuminating     | Phase 2            | Skipped because source is JavaScript-rendered.                                                                                                                                |
-| Google CSE                         | Disabled / Phase 2 | Google Custom Search JSON API was blocked/closed for new customers. Google’s replacement option appears to be Vertex AI Search / Agent Builder, but it is not a free service. |
-| EPA ENERGY STAR Solicitations      | Disabled           | No confirmed current replacement URL.                                                                                                                                         |
-| PJM solicitations                  | Needs follow-up    | Configured URL returned 0 candidates and appears to be broken/not useful as a scrapeable RFP source.                                                                          |
+The monitor produces three categories of outputs.
+
+### 1. Opportunity Email Digest
+
+The opportunity digest is sent through SendGrid.
+
+It reports newly identified passing opportunities only. It does not re-email opportunities that were already saved to the Supabase seen-set unless deduplication is bypassed with `--force-all` or Supabase is unavailable.
+
+Current opportunity digest subjects are monitor-specific:
+
+| Monitor | Subject Prefix |
+| --- | --- |
+| `emv` | `[CxA RFP Monitor]` |
+| `commissioning` | `[CxA Commissioning RFP Monitor]` |
+
+Current opportunity digest recipients are configured in `config.py`.
+
+#### EM&V / Evaluation Digest Recipients
+
+```text
+riazul.hoque@cx-assoc.com
+eric@cx-assoc.com
+carrie.napolitan@cx-assoc.com
+liza.boyle@cx-assoc.com
+rachael@cx-assoc.com
+matt@cx-assoc.com
+```
+
+#### Commissioning / RCx Digest Recipients
+
+```text
+carrie.napolitan@cx-assoc.com
+cathleen.branon-keogh@cx-assoc.com
+walker@cx-assoc.com
+mike.lacrosse@cx-assoc.com
+matt@cx-assoc.com
+eric@cx-assoc.com
+riazul.hoque@cx-assoc.com
+```
+
+### 2. GitHub Pages Dashboard
+
+The dashboard is a static GitHub Pages site with a landing page and one dashboard page per monitor.
+
+| Page | Purpose |
+| --- | --- |
+| `docs/index.html` | Landing page linking to each monitor dashboard |
+| `docs/emv.html` | EM&V / Evaluation dashboard |
+| `docs/commissioning.html` | Commissioning / RCx dashboard |
+
+Current live URLs are configured in `config.py`:
+
+```text
+https://cx-associates.github.io/rfp-monitor/emv.html
+https://cx-associates.github.io/rfp-monitor/commissioning.html
+```
+
+The dashboard has:
+
+- a main opportunity table for opportunities that pass the scoring threshold;
+- an active opportunity cache so previously identified passing opportunities remain visible until their deadline, or for 30 days when no deadline is available;
+- a collapsed manual-review section for filtered below-threshold opportunities;
+- manual-review X buttons that call a Supabase Edge Function and write suppression records;
+- client-side filtering/searching;
+- a "NEW" indicator for opportunities newly identified in the current run.
+
+### 3. Source-Health Email
+
+Each non-dry monitor run sends a separate source-health email through SendGrid. This email is intentionally separate from the opportunity digest.
+
+The source-health email is sent to:
+
+```text
+riazul.hoque@cx-assoc.com
+liza.boyle@cx-assoc.com
+eric@cx-assoc.com
+```
+
+The health email subject format is:
+
+```text
+[CxA RFP Monitor Health] <Monitor Label> source report - <Date> (<error count> errors, <warning count> warnings)
+```
+
+Examples:
+
+```text
+[CxA RFP Monitor Health] EM&V / Evaluation source report - July 10, 2026 (0 errors, 12 warnings)
+[CxA RFP Monitor Health] Commissioning / RCx source report - July 10, 2026 (0 errors, 12 warnings)
+```
+
+Source-health reporting is currently **in-memory and email-only**. It is not yet persisted to Supabase. A future enhancement should persist health results so we can trend sources that repeatedly return zero candidates or repeatedly fail.
+
+---
+
+## What Each Run Does
+
+Each monitor run follows this flow:
+
+1. Parse CLI/workflow arguments:
+   - keyword mode: `broad` or `medium`;
+   - monitor type: `emv` or `commissioning`;
+   - dry-run flag;
+   - force-all flag;
+   - source group selection.
+2. Normalize the monitor type and set `MONITOR_TYPE` for Supabase scoping.
+3. Load the seen-set from Supabase unless this is a dry run.
+4. Run selected scraper groups:
+   - SAM.gov;
+   - utility/quasi-public sources;
+   - priority state/direct sources.
+5. Record source-health results during scraping.
+6. Score raw opportunities with the keyword set for the selected monitor type.
+7. Split scored opportunities into:
+   - passing opportunities;
+   - below-threshold manual-review candidates;
+   - all scored opportunities.
+8. Filter manual-review candidates to remove obvious navigation/support-page noise.
+9. Load manual-review suppressions from Supabase and remove suppressed manual-review rows.
+10. For non-dry runs, upsert current passing opportunities into the active dashboard cache.
+11. For non-dry runs, load active cached dashboard opportunities.
+12. Merge current passing opportunities with cached active opportunities.
+13. Deduplicate current passing opportunities against the monitor-specific Supabase seen-set unless `--force-all` is used.
+14. For non-dry runs, send:
+   - the opportunity digest;
+   - the source-health email;
+   - the dashboard files.
+15. Save newly delivered opportunities to the Supabase seen-set if at least one main delivery channel succeeds.
+
+Important behavior:
+
+- The **opportunity digest** is for newly identified passing opportunities.
+- The **dashboard** is an active opportunity board.
+- The **source-health email** is for source monitoring and troubleshooting.
+- A broken source should not stop the full run.
+- Dry runs stop before delivery and state update.
+
+---
+
+## Monitor Types
+
+The monitor type controls keyword tiers, score threshold, dashboard output, email subject prefix, digest recipients, and Supabase record scope.
+
+Valid monitor types:
+
+```text
+emv
+commissioning
+```
+
+### EM&V / Evaluation Monitor
+
+The `emv` monitor uses EM&V, M&V, program evaluation, energy-efficiency evaluation, demand-side management, savings verification, technical review, impact/process evaluation, non-energy impacts, TRM, and related terms.
+
+Broad-mode threshold:
+
+```text
+2
+```
+
+Medium-mode threshold:
+
+```text
+5
+```
+
+### Commissioning / RCx Monitor
+
+The `commissioning` monitor uses commissioning, retro-commissioning, MBCx, CxA/CxP, functional performance testing, systems verification, TAB/commissioning, LEED commissioning, building enclosure commissioning, envelope testing, HVAC/BAS/controls, building systems, and broader facility project indicators.
+
+Broad-mode threshold:
+
+```text
+5
+```
+
+Medium-mode threshold:
+
+```text
+5
+```
+
+The commissioning threshold is intentionally higher than EM&V broad mode so that a single broad tertiary project indicator is not enough to pass.
 
 ---
 
@@ -94,18 +223,21 @@ The important distinction is:
 ```text
 rfp-monitor/
 ├── main.py                                      # Orchestrator / entry point
-├── config.py                                    # Keywords, sources, thresholds, email settings
+├── config.py                                    # Keywords, sources, thresholds, monitor settings, email settings
 ├── models.py                                    # Opportunity dataclass and shared utilities
-├── scorer.py                                    # Keyword scoring and manual-review filtering
+├── scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
 ├── dedup.py                                     # Supabase deduplication, active cache, and suppression filtering
-├── delivery.py                                  # SendGrid email + GitHub Pages dashboard generator
+├── delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
+├── source_health.py                             # In-memory source-health records and health-code summary
 ├── requirements.txt                             # Python dependencies
 ├── docs/
-│   └── index.html                               # Dashboard output file
+│   ├── index.html                               # Landing page output
+│   ├── emv.html                                 # EM&V dashboard output
+│   └── commissioning.html                       # Commissioning dashboard output
 ├── scrapers/
 │   ├── __init__.py
 │   ├── sam_gov.py                               # SAM.gov federal API scraper
-│   ├── web_sources.py                           # Utility/quasi-public and state portal scrapers
+│   ├── web_sources.py                           # Utility/quasi-public and direct state/municipal scrapers
 │   └── google_cse.py                            # Google CSE scraper, currently disabled in main.py
 ├── supabase/
 │   └── functions/
@@ -118,80 +250,42 @@ rfp-monitor/
 
 ---
 
-## Main Run Flow
-
-The full monitoring cycle is handled in `main.py`.
-
-1. Parse workflow/CLI arguments.
-
-2. Run selected scrapers.
-
-3. Score all raw opportunities.
-
-4. Filter below-threshold candidates for manual review.
-
-5. Load manual-review suppressions from Supabase.
-
-6. Remove suppressed manual-review candidates from the dashboard list.
-
-7. Update/load active dashboard cache:
-
-   * Upsert current passing opportunities into `opportunity_active`.
-   * Set `visible_until` to the opportunity deadline if available.
-   * If no deadline is available, set `visible_until` to 30 days after first seen.
-   * Load all active cached opportunities where `visible_until` is today or later.
-   * Merge current passing opportunities with active cached opportunities.
-
-8. Load Supabase deduplication records.
-
-9. Deduplicate current passing opportunities.
-
-10. Send email digest if SendGrid is available/enabled.
-
-11. Generate dashboard using the merged active dashboard opportunity list.
-
-12. Save newly delivered opportunities to Supabase if at least one delivery channel succeeds.
-
-The code is designed for partial success. One broken source should not stop the full run.
-
-### No-Passing-Opportunity Behavior
-
-If no opportunities pass the scoring threshold, the dashboard is still generated with active cached opportunities and manual-review candidates as long as raw opportunities were scraped and survived the manual-review cleanup filter.
-
-If all scrapers return zero raw opportunities, the run generates an empty dashboard.
-
----
-
-## Dashboard Persistence Behavior
-
-The dashboard is intended to act as an active opportunity board, not just a list of items found in the most recent scrape.
-
-Passing opportunities are cached in Supabase table `opportunity_active`.
-
-Visibility rules:
-
-| Opportunity Type | Dashboard Visibility Rule                    |
-| ---------------- | -------------------------------------------- |
-| Has deadline     | Remains visible through the deadline date.   |
-| No deadline      | Remains visible for 30 days from first seen. |
-
-This protects against source-page drift or temporary scraper misses. For example, if an RFP is scraped and scored once, but the source page temporarily stops listing it, the dashboard can still show it until its `visible_until` date.
-
-The dashboard cache does **not** change email behavior. Email deduplication still uses `opportunity_seen`, so previously identified opportunities are not repeatedly emailed just because they remain visible on the dashboard.
-
----
-
 ## GitHub Actions Workflow
 
-The workflow can run on schedule or manually.
-
-Scheduled run:
+Workflow file:
 
 ```text
-cron: "57 9 * * 1"
+.github/workflows/rfp_monitor.yml
 ```
 
-This is Monday at 9:57 UTC. Depending on daylight saving time, that is either 4:57 AM or 5:57 AM Eastern.
+The workflow has two triggers:
+
+1. Scheduled weekly run.
+2. Manual `workflow_dispatch` run.
+
+### Scheduled Run
+
+The scheduled run ignores manual workflow inputs and runs both monitor types sequentially:
+
+```bash
+python main.py --mode broad --monitor-type emv --sources all
+python main.py --mode broad --monitor-type commissioning --sources all
+```
+
+Scheduled runs provide SendGrid credentials to the Python process through GitHub Secrets, so scheduled runs are expected to send both opportunity digests and source-health emails.
+
+Expected scheduled output volume if both runs complete and SendGrid is available:
+
+```text
+1 EM&V opportunity digest
+1 EM&V source-health email
+1 commissioning opportunity digest
+1 commissioning source-health email
+```
+
+The opportunity digest may be a "No new RFPs this week" email if no new passing opportunities survive deduplication.
+
+### Manual Workflow Inputs
 
 Manual runs are available from:
 
@@ -199,188 +293,323 @@ Manual runs are available from:
 GitHub → Actions → CxA RFP Monitor → Run workflow
 ```
 
-### Manual Workflow Inputs
+| Input | Description |
+| --- | --- |
+| `mode` | Keyword mode: `broad` or `medium`. |
+| `monitor_type` | Monitor type: `emv` or `commissioning`. |
+| `dry_run` | If `true`, runs scrapers/scoring only and skips delivery/state update. |
+| `sources` | Source group to run: `sam`, `utilities`, `states_direct`, `google_cse`, or `all`. |
+| `force_all` | If `true`, skips deduplication and reports all passing opportunities. Use carefully. |
+| `send_email` | If `true`, exposes `SENDGRID_API_KEY` to the run and allows emails. If `false`, opportunity and source-health emails are skipped. |
 
-| Input        | Description                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------- |
-| `mode`       | Keyword mode: `broad` or `medium`.                                                          |
-| `dry_run`    | If `true`, runs scrapers/scoring only and skips delivery/state update.                      |
-| `sources`    | Source group to run: `sam`, `utilities`, `states_direct`, `google_cse`, or `all`.           |
-| `force_all`  | If `true`, skips deduplication and reports all passing opportunities. Use carefully.        |
-| `send_email` | If `true`, passes the SendGrid key and allows email delivery. If `false`, email is skipped. |
+Manual runs execute only the selected `monitor_type`.
 
-### Monitor Type
+### GitHub Pages Behavior
 
-The GitHub Actions workflow sets:
+Dashboard generation and GitHub Pages deployment are separated.
 
-```text
-MONITOR_TYPE: emv
-```
+- Feature branches upload a downloadable `rfp-dashboard-preview` artifact.
+- `main` deploys to GitHub Pages.
+- Dry-run workflow dispatches do not upload/deploy dashboards.
 
-This scopes Supabase deduplication, active dashboard cache records, and manual-review suppressions to the EM&V monitor. The Supabase tables include a `monitor_type` column so future monitors, such as commissioning or RCx, can share the same tables without mixing records.
-
-### Recommended Manual Test Settings
-
-Dashboard and Supabase active-cache test without email:
+The preview/deploy artifact includes:
 
 ```text
-mode: broad
-dry_run: false
-sources: utilities
-force_all: false
-send_email: false
+docs/index.html
+docs/emv.html
+docs/commissioning.html
 ```
-
-Full-source dashboard and active-cache test without email:
-
-```text
-mode: broad
-dry_run: false
-sources: all
-force_all: false
-send_email: false
-```
-
-Scrape/scoring-only test with no delivery or state update:
-
-```text
-mode: broad
-dry_run: true
-sources: utilities
-force_all: false
-send_email: false
-```
-
-Controlled email test:
-
-```text
-mode: broad
-dry_run: false
-sources: utilities
-force_all: true
-send_email: true
-```
-
-Use `force_all: true` only for controlled testing because it bypasses the seen-set and can resend opportunities that were already reported.
-
-### Scheduled Production Run
-
-The scheduled Monday run is the real production behavior. It should:
-
-1. Run from `main`.
-2. Use GitHub Actions secrets.
-3. Deduplicate using Supabase.
-4. Update/load active dashboard opportunities from Supabase.
-5. Send the email digest.
-6. Regenerate and publish the live dashboard.
-7. Save newly delivered opportunities to Supabase.
-
-Do not manually run the production workflow unless you intentionally want to send an email digest.
 
 ---
 
-## GitHub Pages Deployment Behavior
+## Running Locally
 
-Dashboard generation and GitHub Pages deployment are separated:
+Install dependencies:
 
-* On **feature branches**, the workflow uploads a downloadable `rfp-dashboard-preview` artifact.
-* On **main**, the workflow deploys the dashboard to GitHub Pages.
-* This allows dashboard testing before merge without changing the live dashboard.
-
-The dashboard output path is configured in `config.py`:
-
-```python
-DASHBOARD_OUTPUT_PATH = "docs/index.html"
+```powershell
+pip install -r requirements.txt
 ```
 
-The live dashboard is published at:
+Set environment variables as needed:
+
+```powershell
+$env:SAM_API_KEY="your-key"
+$env:SENDGRID_API_KEY="your-key"
+$env:SUPABASE_URL="your-url"
+$env:SUPABASE_KEY="your-key"
+```
+
+Run examples:
+
+```powershell
+# EM&V dry run across all sources
+python main.py --mode broad --monitor-type emv --sources all --dry-run
+
+# Commissioning dry run across all sources
+python main.py --mode broad --monitor-type commissioning --sources all --dry-run
+
+# Utility-only EM&V dry run
+python main.py --mode broad --monitor-type emv --sources utilities --dry-run
+
+# Direct-state commissioning dry run
+python main.py --mode broad --monitor-type commissioning --sources states_direct --dry-run
+
+# Manual live local run, no force-all
+python main.py --mode broad --monitor-type emv --sources utilities
+
+# Manual live local run that bypasses deduplication
+python main.py --mode broad --monitor-type commissioning --sources utilities --force-all
+```
+
+Use live local runs carefully. If `SENDGRID_API_KEY` and Supabase variables are set locally, a live run can send emails and update Supabase.
+
+### Safe Local Live-Path Test Without Email or Supabase
+
+This verifies that the non-dry delivery path is called while preventing email delivery and Supabase writes:
+
+```powershell
+$oldSendGrid = $env:SENDGRID_API_KEY
+$oldSupabaseUrl = $env:SUPABASE_URL
+$oldSupabaseKey = $env:SUPABASE_KEY
+
+$env:SENDGRID_API_KEY = ""
+$env:SUPABASE_URL = ""
+$env:SUPABASE_KEY = ""
+
+python main.py --mode broad --monitor-type commissioning --sources utilities,states_direct --force-all
+
+$env:SENDGRID_API_KEY = $oldSendGrid
+$env:SUPABASE_URL = $oldSupabaseUrl
+$env:SUPABASE_KEY = $oldSupabaseKey
+```
+
+Expected delivery-path log pattern:
 
 ```text
-https://cx-associates.github.io/rfp-monitor/
+SENDGRID_API_KEY not set. Skipping email delivery.
+SENDGRID_API_KEY not set. Skipping source health email.
+Delivery: email=FAILED | source_health_email=FAILED | dashboard=OK
 ```
 
-If the live dashboard does not show recent code changes, check the “Last updated” timestamp. The live dashboard only changes after the workflow regenerates and publishes `docs/index.html`.
+Because Supabase variables are blank in this test, warnings about skipped deduplication and failed seen-set save are expected.
+
+### Useful Local Test Commands
+
+Compile key files:
+
+```powershell
+python -m py_compile source_health.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
+```
+
+Run both full dry runs:
+
+```powershell
+python main.py --mode broad --monitor-type emv --sources all --dry-run
+python main.py --mode broad --monitor-type commissioning --sources all --dry-run
+```
+
+Check git status before committing:
+
+```powershell
+git status
+git diff --stat
+git diff --check
+```
+
+Restore locally generated dashboard output before committing, unless the dashboard files were intentionally changed:
+
+```powershell
+git restore docs/index.html docs/emv.html docs/commissioning.html
+```
 
 ---
 
-## Email Delivery Behavior
+## Source Groups
 
-Email is sent through SendGrid using `SENDGRID_API_KEY`.
+Use the `--sources` CLI argument locally or the `sources` workflow input in GitHub Actions.
 
-For manual workflow runs:
-
-* `send_email: false` leaves the SendGrid key unavailable to the Python process and skips email delivery.
-* `send_email: true` allows email delivery if the secret and recipient configuration are valid.
-
-Scheduled production runs are expected to send the digest.
-
-Important distinction:
-
-* `dry_run: false` allows real delivery/state behavior.
-* `send_email: false` prevents email delivery for manual workflow runs.
-* A useful dashboard/Supabase test usually uses `dry_run: false` and `send_email: false`.
-
-Email settings are configured in `config.py`:
-
-```python
-SENDGRID_API_KEY_ENV = "SENDGRID_API_KEY"
-EMAIL_FROM = "..."
-EMAIL_TO = [...]
-EMAIL_SUBJECT_PREFIX = "[CxA RFP Monitor]"
-```
-
-The sending address must be authorized/accepted by SendGrid.
-
-Current recipients are controlled only by the `EMAIL_TO` list in `config.py`. As of the attached configuration, that list includes Riazul, Eric, Carrie, Liza, Rachael, and Matt.
-
+| Source Group | What it runs |
+| --- | --- |
+| `sam` | SAM.gov federal opportunities only. |
+| `utilities` | Active utility and quasi-public sources in `UTILITY_SOURCES`, plus the dedicated NASEO parser. |
+| `states_direct` | Direct state, municipal, and priority procurement sources in `DIRECT_SCRAPE_STATES`. |
+| `google_cse` | Currently disabled in `main.py`. If requested, the run logs a warning and continues without CSE results. |
+| `all` | SAM.gov, utility/quasi-public sources, and direct state/municipal sources. |
 
 ---
 
-## GitHub Secrets Required
+## Current Source Inventory
 
-These are configured under:
+This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES` configuration.
+
+### Utility / Quasi-Public Sources
+
+| Source | Parser Type / Status |
+| --- | --- |
+| NEEP (Northeast Energy Efficiency Partnerships) | `neep_rfps` |
+| ACEEE | inactive |
+| E4TheFuture | inactive |
+| NYSERDA | generic list |
+| ISO-NE Solicitations | generic list |
+| Eversource (MA/CT/NH) | generic list |
+| Green Mountain Power | generic list |
+| National Grid (NY/NE) | skipped: `js_render=True` / Phase 2 |
+| Avangrid / United Illuminating (CT) | skipped: `js_render=True` / Phase 2 |
+| VEIC & Efficiency Vermont | `veic_rfps` |
+| Energy Trust of Oregon Contracting Opportunities | `energy_trust_rfps` |
+| PG&E Energy Efficiency Solicitations | `pge_ee_solicitations` |
+| PJM Interconnection Solicitations | inactive |
+| NYISO Procurement | generic list; current URL needs follow-up |
+| AESP Active RFPs | `aesp_rfps` |
+| Efficiency Maine | `efficiency_maine_rfps` |
+| Burlington Electric Department RFPs | `burlington_electric_rfps` |
+| Mass Save / EEAC | generic list |
+| Cape Light Compact RFPs | `cape_light_rfps` |
+| Entergy RFPs | `entergy_rfps` |
+| DOE EERE Funding Opportunities | generic list |
+| EPA ENERGY STAR Solicitations | inactive |
+
+### Direct State / Municipal / Priority Sources
+
+| Source | Parser Type / Status |
+| --- | --- |
+| Vermont VSIGNS | `vsigns`; known connection/DNS issue in recent local runs |
+| Massachusetts COMMBUYS | `commbuys` |
+| NYSERDA Funding (direct) | generic list |
+| California CaleProcure | `ca_eprocure` |
+| SUNY SUCF Construction Bid Calendar | `suny_sucf_bid_calendar_pdf` |
+| NYS Contract Reporter | `nyscr_contract_reporter` |
+| Connecticut DEEP RFP Search | `ct_deep_rfp_search` |
+| Vermont DPS Requests for Proposals | `vermont_dps_rfps` |
+| VT BGS OPC Current Bid Listings | `vt_bgs_opc_bids` |
+| Colchester VT Bid Postings | `civicengage_bids` |
+| Essex VT Bid Postings | `civicengage_bids` |
+| Montpelier VT Bid Postings | `civicengage_bids` |
+| South Burlington VT Bid Postings | `civicengage_bids` |
+| Fairfax VT RFPs | `fairfax_vt_bids` |
+| Essex Junction VT Invitation to Bid | `municipal_document_links` |
+| Woodstock VT Request for Proposals | `municipal_document_links` |
+| Rutland VT Bids and RFPs | `municipal_document_links` |
+| Shelburne VT Bids RFQs and RFPs | `municipal_document_links` |
+| Saranac Lake NY Bids RFPs RFQs | `municipal_document_links` |
+| Vermont Business Registry Bid Search | `vermont_business_registry` |
+| NH Department of Energy RFPs | `nh_energy_rfps` |
+| Maine Municipal Association RFPs | `maine_municipal_association_rfps` |
+| Maine BGS Business Opportunities | `maine_bgs_business_opportunities` |
+| University of Maine System Upcoming Bids | `umaine_upcoming_bids` |
+| Connecticut Energy Efficiency Board RFPs | `ct_eeb_rfps` |
+
+---
+
+## Source-Health Reporting
+
+Source-health tracking is implemented in `source_health.py` and used by `main.py`, `scrapers/web_sources.py`, and `delivery.py`.
+
+Health records are stored in memory during a single Python process. At the end of each non-dry run, the records are rendered into a separate HTML email.
+
+Current health codes:
+
+| Code | Meaning |
+| --- | --- |
+| `HEALTH_OK_NONZERO` | Source returned one or more candidates. |
+| `HEALTH_WARN_ZERO` | Source completed but returned 0 candidates. |
+| `HEALTH_WARN_SKIPPED_JS` | Source was skipped because it is marked `js_render=True` / Phase 2. |
+| `HEALTH_ERROR_EXCEPTION` | Source threw an exception that reached the source wrapper. |
+| `HEALTH_WARN_TOTAL_ZERO` | Entire source group returned 0 candidates. |
+
+### Interpreting Source-Health Emails
+
+A warning does not automatically mean the run failed.
+
+Examples:
+
+- `HEALTH_WARN_ZERO` may be normal for sources that simply have no current RFPs.
+- `HEALTH_WARN_SKIPPED_JS` is expected for sources intentionally deferred to Phase 2.
+- `HEALTH_WARN_TOTAL_ZERO` is expected for SAM.gov in local runs where `SAM_API_KEY` is not set.
+- `HEALTH_ERROR_EXCEPTION` is more serious and usually means the scraper/source needs immediate review.
+
+### Important V1 Limitation
+
+Some lower-level fetch helpers catch HTTP/connection problems, log a warning, and return an empty result list. In those cases, the wrapper currently records `HEALTH_WARN_ZERO`, not `HEALTH_ERROR_EXCEPTION`.
+
+Known example from recent local runs:
 
 ```text
-GitHub repo → Settings → Secrets and variables → Actions
+Vermont VSIGNS
 ```
 
-| Secret             | Purpose                                                                                                         |
-| ------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `SAM_API_KEY`      | SAM.gov federal opportunities API.                                                                              |
-| `SENDGRID_API_KEY` | SendGrid email delivery.                                                                                        |
-| `SUPABASE_URL`     | Supabase project URL for deduplication, active dashboard cache, and suppression filtering during workflow runs. |
-| `SUPABASE_KEY`     | Supabase service/API key used by Python Supabase logic.                                                         |
-| `GOOGLE_CSE_KEY`   | Google Custom Search key; currently unused/disabled.                                                            |
-| `GOOGLE_CSE_ID`    | Google Custom Search engine ID; currently unused/disabled.                                                      |
+Recent local runs logged a DNS/name-resolution connection warning for VSIGNS, but the source-health record was:
 
-Important distinction:
+```text
+HEALTH_WARN_ZERO
+```
 
-* `SUPABASE_URL` and `SUPABASE_KEY` are **GitHub Actions secrets** used by the Python workflow.
-* `RFP_ADMIN_TOKEN`, `RFP_SUPABASE_URL`, and `RFP_SUPABASE_SERVICE_ROLE_KEY` are **Supabase Edge Function secrets**, not GitHub secrets.
+because the underlying fetch returned an empty result rather than raising an exception through the source wrapper.
 
-Do not commit any secret values to the repository.
+This should be noted in internal launch/update communication. A future source-health persistence update should distinguish:
+
+```text
+true zero candidates
+fetch/page-load failure that returned zero
+parser failure that returned zero
+```
+
+### Future Source-Health Enhancement
+
+Planned later enhancement:
+
+- add a Supabase source-health table;
+- persist source name, group, monitor type, health code, candidate count, message, and run timestamp;
+- trend sources that repeatedly return zero candidates;
+- flag normally productive sources that suddenly drop to zero;
+- distinguish fetch failures from true zero-candidate pages.
 
 ---
 
-## Supabase Tables
+## Supabase State and Record Scoping
 
-The monitor uses three Supabase tables:
+The monitor uses Supabase for:
 
-1. `opportunity_seen`
-2. `opportunity_active`
-3. `manual_review_suppressed`
+1. opportunity email deduplication;
+2. active dashboard persistence;
+3. manual-review suppression.
 
-All are scoped by `monitor_type`, which defaults to:
+Current tables:
+
+```text
+opportunity_seen
+opportunity_active
+manual_review_suppressed
+```
+
+All three tables are scoped by `monitor_type`.
+
+The same source/opportunity can therefore exist independently for:
 
 ```text
 emv
+commissioning
 ```
 
-This allows the same Supabase project to support future commissioning, RCx, or other monitors without key collisions.
+This is intentional. It prevents the EM&V monitor from hiding or deduplicating commissioning results, and vice versa.
 
-### Table: `opportunity_seen`
+### Important Import/Environment Behavior
 
-This table stores delivered opportunities so future weekly runs do not resend the same RFP.
+`dedup.py` reads `MONITOR_TYPE` from the environment when it is imported.
+
+`main.py` normalizes the CLI/environment monitor type and sets:
+
+```python
+os.environ["MONITOR_TYPE"] = monitor_type
+```
+
+before importing `dedup.py` functions during the run. The scheduled workflow runs each monitor as a separate Python process, so each scheduled monitor run gets the correct Supabase scope.
+
+---
+
+## Supabase Table: `opportunity_seen`
+
+Stores delivered opportunities so future weekly runs do not resend the same RFP.
 
 Expected schema:
 
@@ -406,9 +635,43 @@ on public.opportunity_seen
 to service_role;
 ```
 
-### Table: `opportunity_active`
+Entries expire after:
 
-This table stores passing opportunities that should remain visible on the dashboard.
+```python
+STATE_EXPIRY_DAYS = 180
+```
+
+Recommended checks:
+
+```sql
+select
+  monitor_type,
+  source,
+  title,
+  date_found,
+  expiry_date
+from public.opportunity_seen
+order by date_found desc, monitor_type, source, title;
+```
+
+Monitor-specific query:
+
+```sql
+select
+  source,
+  title,
+  date_found,
+  expiry_date
+from public.opportunity_seen
+where monitor_type = 'commissioning'
+order by date_found desc, source, title;
+```
+
+---
+
+## Supabase Table: `opportunity_active`
+
+Stores passing opportunities that should remain visible on the dashboard.
 
 Expected schema:
 
@@ -437,7 +700,29 @@ on public.opportunity_active
 to service_role;
 ```
 
-Recommended verification query:
+Visibility rules:
+
+| Opportunity Type | `visible_until` Rule |
+| --- | --- |
+| Has deadline | Equal to the deadline date. |
+| No deadline | 30 days after `first_seen`. |
+
+Recommended checks:
+
+```sql
+select
+  monitor_type,
+  source,
+  title,
+  deadline,
+  first_seen,
+  last_seen,
+  visible_until
+from public.opportunity_active
+order by monitor_type, visible_until, source, title;
+```
+
+Monitor-specific query:
 
 ```sql
 select
@@ -452,14 +737,11 @@ where monitor_type = 'emv'
 order by visible_until, source, title;
 ```
 
-Expected behavior:
+---
 
-* Opportunities with deadlines should have `visible_until` equal to the deadline.
-* Opportunities without deadlines should have `visible_until` equal to `first_seen + 30 days`.
+## Supabase Table: `manual_review_suppressed`
 
-### Table: `manual_review_suppressed`
-
-This table stores manual-review rows hidden through the dashboard X button.
+Stores manual-review rows hidden through the dashboard X button.
 
 Expected schema:
 
@@ -486,112 +768,49 @@ on public.manual_review_suppressed
 to service_role;
 ```
 
----
-
-## Supabase Deduplication
-
-Deduplication is handled in `dedup.py`.
-
-On each non-dry run:
-
-1. Load non-expired `opportunity_seen` rows from Supabase.
-2. Compare current passing opportunities against the seen-set.
-3. Treat unseen passing opportunities as new.
-4. After successful delivery, save the new opportunities to `opportunity_seen`.
-
-Each opportunity has a stable unique key based on source and notice ID. If a notice ID is not available, the code falls back to a source + URL hash.
-
-Entries expire after the configured retention period:
-
-```python
-STATE_EXPIRY_DAYS = 180
-```
-
-If Supabase credentials are missing or unavailable, deduplication is skipped and all passing opportunities may appear as new for that run.
-
-Local dry runs often show this warning unless you set Supabase variables locally:
-
-```text
-SUPABASE_URL or SUPABASE_KEY not set in environment. Deduplication will be skipped
-```
-
-That warning is expected for local shells without Supabase environment variables. The scheduled GitHub Actions run should use the GitHub secrets.
-
----
-
-## Supabase Active Dashboard Cache
-
-Active dashboard persistence is handled in `dedup.py`.
-
-Main helper functions:
-
-```python
-upsert_active_dashboard_opportunities()
-load_active_dashboard_opportunities()
-merge_active_dashboard_opportunities()
-```
-
-On each non-dry run:
-
-1. Current passing opportunities are upserted into `opportunity_active`.
-
-2. Existing `first_seen` dates are preserved.
-
-3. `last_seen` is updated to the current run date.
-
-4. `visible_until` is calculated:
-
-   * deadline date, if the opportunity has a deadline,
-   * otherwise `first_seen + 30 days`.
-
-5. Active rows are loaded where:
+Recommended check:
 
 ```sql
-visible_until >= today
+select
+  monitor_type,
+  source,
+  title,
+  suppressed_at,
+  reason,
+  suppressed_by
+from public.manual_review_suppressed
+order by suppressed_at desc, monitor_type, source, title;
 ```
-
-6. Current passing opportunities are merged with cached active opportunities.
-7. Current versions win over cached versions if the same unique key appears in both lists.
-
-This means a previously identified RFP can remain visible on the dashboard even if it is not scraped again in a later run, as long as it has not passed its `visible_until` date.
-
-This cache is separate from the email seen-set. Keeping an opportunity visible on the dashboard does not cause repeat emails.
-
-If Supabase credentials are missing or unavailable, the active dashboard cache is skipped and the dashboard falls back to the currently scored opportunities only.
 
 ---
 
-## Manual-Review Suppression
+## Manual-Review Suppression / Dashboard X Button
 
 The dashboard manual-review section includes an X button on each manual-review row.
 
 Clicking the X button:
 
 1. Prompts the user for the dashboard removal token if the browser does not already have one.
-2. Sends a request to the Supabase Edge Function.
+2. Sends a POST request to the Supabase Edge Function.
 3. Writes a row to `manual_review_suppressed`.
 4. Removes the row from the current page immediately.
-5. Keeps the row hidden from future dashboard generations.
+5. Keeps the row hidden from future dashboard generations for the same monitor type.
 
-The token is not stored in the repository or the static HTML dashboard.
+The dashboard sends the token as:
 
-Browser behavior:
+```text
+x-rfp-admin-token
+```
 
-* The first X click prompts for the token.
-* The token is stored in the user’s browser `localStorage` as `rfpAdminToken`.
-* Future X clicks from that same browser should not prompt again unless localStorage is cleared or the token is rejected.
+The token is stored in browser `localStorage` as:
 
-Security behavior:
+```text
+rfpAdminToken
+```
 
-* The dashboard sends the entered token as the request header `x-rfp-admin-token`.
-* The Edge Function compares that value to its private `RFP_ADMIN_TOKEN` secret.
-* If the token is wrong, the function returns `401 Unauthorized`.
-* The service role key is only used server-side inside the Edge Function.
-* Do not embed the token or service role key in `docs/index.html`.
+The static dashboard does not contain the token or the Supabase service-role key.
 
----
-
-## Supabase Edge Function
+### Supabase Edge Function
 
 Function name:
 
@@ -599,29 +818,13 @@ Function name:
 suppress-manual-review
 ```
 
-Function path:
-
-```text
-supabase/functions/suppress-manual-review/index.ts
-```
-
-Endpoint:
+Endpoint currently used by the generated dashboard JavaScript:
 
 ```text
 https://udxcbyoohgzdkjxytxzg.functions.supabase.co/suppress-manual-review
 ```
 
-The function:
-
-1. Accepts POST requests from the static dashboard.
-2. Allows CORS and includes the custom `x-rfp-admin-token` header.
-3. Rejects requests without the correct admin token.
-4. Uses the server-side Supabase service role key.
-5. Upserts into `manual_review_suppressed`.
-
-### Supabase Edge Function Secrets
-
-These are configured in Supabase, not GitHub:
+Expected Supabase Edge Function secrets:
 
 ```text
 RFP_ADMIN_TOKEN
@@ -629,25 +832,39 @@ RFP_SUPABASE_URL
 RFP_SUPABASE_SERVICE_ROLE_KEY
 ```
 
-Set or update them with Supabase CLI:
+These are Supabase secrets, not GitHub Actions secrets.
 
-```powershell
-supabase secrets set RFP_ADMIN_TOKEN="$RfpAdminToken"
-supabase secrets set RFP_SUPABASE_URL="https://udxcbyoohgzdkjxytxzg.supabase.co"
-supabase secrets set RFP_SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
-```
-
-Deploy the function with JWT verification disabled because the dashboard uses the custom removal token instead of Supabase auth:
+Deploy command:
 
 ```powershell
 supabase functions deploy suppress-manual-review --no-verify-jwt
 ```
 
-Test behavior:
+---
 
-* `401 Unauthorized` means the entered dashboard removal token does not match `RFP_ADMIN_TOKEN`.
-* `Invalid API key` means `RFP_SUPABASE_SERVICE_ROLE_KEY` is wrong.
-* Successful response includes `"ok": true`.
+## GitHub Secrets Required
+
+Configure these under:
+
+```text
+GitHub repo → Settings → Secrets and variables → Actions
+```
+
+| Secret | Purpose |
+| --- | --- |
+| `SAM_API_KEY` | SAM.gov federal opportunities API. |
+| `SENDGRID_API_KEY` | SendGrid opportunity digest and source-health email delivery. |
+| `SUPABASE_URL` | Supabase project URL for deduplication, active dashboard cache, and suppression filtering during workflow runs. |
+| `SUPABASE_KEY` | Supabase service/API key used by the Python Supabase logic. |
+| `GOOGLE_CSE_KEY` | Google Custom Search key; currently unused because Google CSE is disabled in `main.py`. |
+| `GOOGLE_CSE_ID` | Google Custom Search engine ID; currently unused because Google CSE is disabled in `main.py`. |
+
+Do not commit secret values to the repository.
+
+Important distinction:
+
+- `SUPABASE_URL` and `SUPABASE_KEY` are GitHub Actions secrets used by the Python workflow.
+- `RFP_ADMIN_TOKEN`, `RFP_SUPABASE_URL`, and `RFP_SUPABASE_SERVICE_ROLE_KEY` are Supabase Edge Function secrets.
 
 ---
 
@@ -657,354 +874,165 @@ Keyword scoring is defined in `config.py` and applied in `scorer.py`.
 
 Two modes are available:
 
-| Mode     | Behavior                                                                    |
-| -------- | --------------------------------------------------------------------------- |
-| `broad`  | Uses primary, secondary, and tertiary keywords. Wider net. Current default. |
-| `medium` | Uses primary and secondary keywords only. Tighter EM&V focus.               |
+| Mode | Behavior |
+| --- | --- |
+| `broad` | Uses primary, secondary, and tertiary keywords. Wider net. Current default. |
+| `medium` | Uses primary and secondary keywords only. Tighter result set. |
 
-Scoring tiers:
+Scoring weights:
 
-| Tier      | Example Focus                                                                                                                                                                                                                             | Points                  |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Primary   | Core EM&V/M&V terminology, IPMVP, measurement and verification, savings verification, and EM&V/M&V services                                                                                                                               | Highest                 |
-| Secondary | Program evaluation, impact evaluation, process evaluation, NTG, free ridership/spillover, deemed savings, custom measure evaluation, load impact, realization rate, claimed/reported/verified savings, and technical/project review terms | Medium                  |
-| Tertiary  | Broader adjacent energy-efficiency, demand response, load research, benchmarking, commissioning/retrocommissioning, decarbonization, greenhouse-gas, audit, QA/QC, TRM, and cost-effectiveness terms                                      | Lowest; broad mode only |
+| Match Type | Points |
+| --- | --- |
+| Primary keyword match | 10 |
+| Secondary keyword match | 5 |
+| Tertiary keyword match | 2 |
+| Title bonus | +5 |
 
-Title matches receive an additional title bonus because titles are often the strongest available signal.
+The title bonus is added when the keyword appears in the opportunity title.
 
-The keyword lists intentionally include common EM&V spelling and punctuation permutations, including:
+Confidence labels:
+
+| Label | Rule |
+| --- | --- |
+| High | Score at or above `MIN_SCORE_HIGH_CONFIDENCE` |
+| Medium | Score is at or above the monitor/mode inclusion threshold but below high-confidence threshold |
+| Below threshold | Score below the monitor/mode inclusion threshold |
+
+Current high-confidence threshold:
 
 ```text
-EM&V
-EMV
-M&V
-MV
-measurement and verification
-measurement & verification
-evaluation, measurement and verification
-evaluation, measurement, and verification
-evaluation measurement verification
+15
 ```
 
-The standalone keyword `energy` should remain commented out or excluded. It is too broad for the current scoring threshold because a single tertiary match can qualify an opportunity in broad mode, which would create substantial non-procurement and non-EM&V noise.
+Current inclusion thresholds:
+
+| Monitor | Broad | Medium |
+| --- | ---: | ---: |
+| `emv` | 2 | 5 |
+| `commissioning` | 5 | 5 |
 
 ---
 
 ## Manual Review Candidates
 
-The scoring criteria were not changed when the manual-review section was added.
-
 The code separates results into:
 
-1. Passing opportunities.
-2. Below-threshold manual-review candidates.
-3. All scored opportunities.
+1. passing opportunities;
+2. below-threshold manual-review candidates;
+3. all scored opportunities.
 
 The dashboard displays passing and active cached opportunities in the main table. A filtered subset of below-threshold opportunities appears in the collapsed manual-review section.
 
-Manual-review filtering removes obvious navigation/support links such as:
+Manual-review filtering removes obvious navigation/support links and other low-value rows. Suppressed manual-review rows are removed before dashboard generation.
+
+The manual-review section is intentionally broad. It is useful for spotting possible missed opportunities and reviewing noisy source behavior without pushing those rows into the main opportunity table or email digest.
+
+---
+
+## Source-Specific Notes
+
+### SAM.gov
+
+SAM.gov is API-based and requires:
 
 ```text
-skip to content
-email-protection links
-generic program pages
-supporting-document-only links
-non-procurement navigation links
+SAM_API_KEY
 ```
 
-Suppressed manual-review rows are removed before dashboard generation.
+If `SAM_API_KEY` is missing, the SAM scraper returns zero candidates and the source group records:
 
----
+```text
+HEALTH_WARN_TOTAL_ZERO
+```
 
-## Source Groups
+This is expected in local shells without the key. It is not expected in scheduled GitHub Actions production runs if the secret is configured.
 
-Use the `--sources` argument locally or the `sources` workflow input in GitHub Actions.
+SAM.gov keyword search is title-based. The NAICS search partially compensates for generic titles.
 
-| Source Group    | What it runs                                                         |
-| --------------- | -------------------------------------------------------------------- |
-| `sam`           | SAM.gov federal opportunities only.                                  |
-| `utilities`     | Utility and quasi-public sources from `UTILITY_SOURCES`, plus NASEO. |
-| `states_direct` | Priority direct state portal scrapers from `DIRECT_SCRAPE_STATES`.   |
-| `google_cse`    | Currently disabled in `main.py`.                                     |
-| `all`           | SAM.gov, utility/quasi-public sources, and direct state scrapes.     |
+### Google CSE
 
----
+Google CSE is currently disabled in `main.py`.
 
-## Source-Specific Filters and Notes
+If `google_cse` is explicitly requested, the run logs a warning and continues without CSE results. The `google_cse.py` file remains in the repository, but it is not active in the current run flow.
+
+### JavaScript-Rendered Sources
+
+Sources marked `js_render=True` are skipped and recorded as:
+
+```text
+HEALTH_WARN_SKIPPED_JS
+```
+
+Currently skipped:
+
+```text
+National Grid (NY/NE)
+Avangrid / United Illuminating (CT)
+```
+
+These need a Phase 2 Playwright implementation or an alternate static/feed source.
+
+### Vermont VSIGNS
+
+Vermont VSIGNS remains configured as a direct source.
+
+Recent local runs logged a DNS/name-resolution connection warning, but the V1 source-health code recorded the source as:
+
+```text
+HEALTH_WARN_ZERO
+```
+
+This is a known V1 limitation because the lower-level fetch helper returned an empty result rather than raising an exception through the source wrapper.
+
+### NYISO Procurement
+
+The configured NYISO procurement URL has returned 404 in recent runs. It remains configured but needs a replacement source URL or should be disabled if no reliable public solicitation page is identified.
+
+### NASEO RFP Board
+
+The NASEO parser targets the open RFP/RFI section and avoids closed/support-document/navigation links where possible. If no open RFP/RFI heading or list is found, it returns zero candidates.
 
 ### AESP Active RFPs
 
-The AESP parser targets the “Active RFPs, RFQs, and RFIs” section.
-
-AESP listings often appear as:
-
-```text
-Due: July 10, 2026 / Request for Proposal: ...
-```
-
-The parser extracts the due date from the heading and filters out expired postings. If a deadline exists and is before today, the opportunity is skipped before scoring.
-
-This prevents stale postings such as expired utility non-wires alternative RFPs from appearing as new opportunities.
-
-### Entergy RFPs
-
-The Entergy parser skips stale prior-year RFPs based on the year in the title.
-
-Example behavior:
-
-```text
-2025 ETI Demand Response RFP
-```
-
-will be skipped when the current year is later than 2025.
+The AESP parser targets active RFP/RFQ/RFI listings and filters expired postings when a deadline can be parsed.
 
 ### Efficiency Maine
 
 The Efficiency Maine parser skips closed, awarded, and prequalified postings.
 
-### COMMBUYS
+### Entergy RFPs
 
-The COMMBUYS parser uses the current public open-bid HTML table layout and extracts:
-
-* bid detail URL,
-* issuer,
-* contact,
-* title,
-* deadline,
-* status.
-
-If COMMBUYS changes its layout, this parser may need to be updated.
-
-### Energy Trust of Oregon
-
-The Energy Trust parser reads contracting opportunity listings and captures opportunities such as Planning, Evaluation and Research RFQs. These can score highly when the title or description includes evaluation/research terminology.
-
-### PG&E Energy Efficiency Solicitations
-
-The PG&E parser targets energy-efficiency solicitation listings and extracts solicitation title, issuer, URL, and source context for scoring.
-
-### Cape Light Compact RFPs
-
-The Cape Light parser reads current RFP/RFI listing cards and is intended to avoid stale or closed listing noise.
+The Entergy parser skips stale prior-year RFPs based on years in titles.
 
 ### Burlington Electric Department RFPs
 
-The BED parser monitors the stable listing page:
+The BED parser monitors the stable BED RFP listing page and keeps dynamic `/rfpdetail?rfp=...` links. Detail pages may be Cloudflare-blocked, so BED items can remain manual-review rows due to limited accessible text.
 
-```text
-https://www.burlingtonelectric.com/rfp/
-```
+### California CEC / CaleProcure
 
-It keeps only dynamic detail links that match the pattern:
-
-```text
-/rfpdetail?rfp=...
-```
-
-This avoids navigation, contact, vendor, and footer links such as Contact Us, Email, Privacy Policy, and Contractor Application.
-
-Important limitation: BED detail pages can be Cloudflare-blocked from direct `requests` access. Because of that, the parser does not rely on fetching the detail page. It uses the RFP number from the listing link and displays titles like:
-
-```text
-BED RFP 071-26
-```
-
-Since the accessible listing text may not include scope, title, or deadline detail, BED opportunities may not score into the main dashboard/email. Check the manual-review section for BED items.
-
-### California CEC Contracts / CaleProcure
-
-The `ca_eprocure` source now prefers a dedicated California Energy Commission contracts parser. This avoids the generic scraper pulling stale or inactive CEC solicitations.
-
-The CEC parser:
-
-* reads the public CEC contracts/solicitations page,
-* skips inactive statuses such as awarded, closed, cancelled/canceled, expired, intent to award, notice of proposed award, no longer accepting, and not accepting,
-* skips support-document links such as addenda, Q&A, question/answer, award notices, bid results, and tabulations,
-* extracts submission deadlines where visible,
-* skips opportunities with parsed deadlines before today.
-
-If the CEC parser returns no active entries, the source can fall back to the generic CaleProcure page behavior.
+The California source uses the `ca_eprocure` parser and prefers California Energy Commission contract/solicitation content. It filters inactive/closed/expired CEC listings when those statuses or deadlines are parseable.
 
 ### NYS Contract Reporter
 
-The NYSCR parser reads the public search-result text blocks from:
+The NYSCR parser reads public listing text blocks and extracts listing fields. Detail pages may require login. The source is broad and can return many general procurement items.
+
+### CT DEEP RFP Search
+
+The CT DEEP parser filters search results toward energy/RFP-related pages and removes common non-procurement noise. Due dates may not always be available in search-result metadata.
+
+### Municipal / Vermont / Maine Sources
+
+Several municipal and regional sources use dedicated parser types such as:
 
 ```text
-https://www.nyscr.ny.gov/Ads/Search
+civicengage_bids
+municipal_document_links
+maine_municipal_association_rfps
+maine_bgs_business_opportunities
+umaine_upcoming_bids
 ```
 
-It extracts listing fields including:
-
-* title,
-* CR number,
-* issuing agency or company,
-* issue date,
-* due date,
-* category,
-* ad type,
-* note text when available.
-
-The CR number is used as the stable internal notice ID, using the pattern:
-
-```text
-NYSCR-<CR number>
-```
-
-NYSCR detail links may require login. For that reason, the dashboard URL points to the NYSCR search page, while the deduplication key remains stable through the CR number.
-
-Because NYSCR is broad and can return many construction/general procurement records, most NYSCR items are expected to remain below threshold unless their title or description matches EM&V/energy keywords.
-
-### Connecticut DEEP RFP Search
-
-The CT DEEP parser reads the public CT DEEP search results page for RFP-related results and applies source-specific filters.
-
-The current parser keeps energy-related terms such as:
-
-* energy efficiency,
-* zero carbon,
-* solar,
-* wind,
-* renewable,
-* clean energy,
-* grid,
-* resilience,
-* ratepayer,
-* decarbonization.
-
-It excludes common noise such as pagination controls, public-comment pages, draft RFP pages, “receives proposals,” “no award,” older year pages, parks/concession pages, paddlecraft, boat launch/marina, food and beverage, solid-waste/CSWSP pages, and addenda.
-
-CT DEEP result pages often do not expose a clean due date in the search result. When no deadline is found, the dashboard may show `--` for deadline and the active cache will use the no-deadline persistence rule.
-
-### NH Department of Energy RFPs
-
-The NH Department of Energy parser is source-specific because RFP summary pages and detail pages have more useful context than generic anchor text alone. It targets current RFP records and extracts available title, deadline, issuer, and description context.
-
-### Connecticut Energy Efficiency Board RFPs
-
-The CT EEB parser reads the Energy Efficiency Board RFP/RFQ page and targets open opportunities rather than archived or informational content.
-
-### NYISO Procurement
-
-The currently configured NYISO procurement URL returns 404. This source needs a replacement URL or should be disabled if no reliable public solicitation page is identified.
-
-### JavaScript-Rendered Sources
-
-Sources marked `js_render=True` are skipped until a Phase 2 Playwright or alternate-feed implementation is added.
-
-Currently skipped:
-
-* National Grid
-* Avangrid / United Illuminating
-
----
-
-## Running Locally
-
-Install dependencies:
-
-```powershell
-pip install -r requirements.txt
-```
-
-Set environment variables as needed.
-
-PowerShell example:
-
-```powershell
-$env:SAM_API_KEY="your-key"
-$env:SENDGRID_API_KEY="your-key"
-$env:SUPABASE_URL="your-url"
-$env:SUPABASE_KEY="your-key"
-```
-
-Run examples:
-
-```powershell
-# Dry run against utility sources
-python main.py --dry-run --sources utilities
-
-# Dry run against all enabled sources
-python main.py --dry-run --sources all
-
-# Medium mode test
-python main.py --dry-run --mode medium --sources all
-
-# Live local run
-python main.py --sources utilities
-```
-
-A dry run skips delivery and state updates.
-
-Avoid running a live local run unless you intentionally want local credentials to send email and update Supabase state.
-
----
-
-## Useful Local Test Commands
-
-Compile key files:
-
-```powershell
-python -m py_compile delivery.py main.py dedup.py scrapers/web_sources.py
-```
-
-Inspect AESP output:
-
-```powershell
-python -c "from scrapers.web_sources import fetch_utility_sources; xs=[o for o in fetch_utility_sources() if o.source=='AESP Active RFPs']; print(len(xs)); [print(o.title, '| deadline=', o.deadline, '| url=', o.url) for o in xs]"
-```
-
-Run utility dry run:
-
-```powershell
-python main.py --dry-run --sources utilities --mode broad
-```
-
-Test active dashboard cache locally if Supabase env vars are set:
-
-```powershell
-@'
-from scrapers.web_sources import fetch_utility_sources
-from scorer import score_split_and_sort
-from dedup import (
-    upsert_active_dashboard_opportunities,
-    load_active_dashboard_opportunities,
-    merge_active_dashboard_opportunities,
-)
-
-raw = fetch_utility_sources()
-scored, manual_review, all_scored = score_split_and_sort(raw, mode="broad")
-
-print("raw:", len(raw))
-print("scored:", len(scored))
-
-ok = upsert_active_dashboard_opportunities(scored)
-print("active upsert ok:", ok)
-
-active = load_active_dashboard_opportunities()
-print("active loaded:", len(active))
-
-merged = merge_active_dashboard_opportunities(scored, active)
-print("dashboard merged:", len(merged))
-
-for opp in merged[:15]:
-    print(opp.title, "| deadline=", opp.deadline, "| source=", opp.source)
-'@ | Set-Content .\test_active_dashboard_cache.py -Encoding UTF8
-
-python .\test_active_dashboard_cache.py
-Remove-Item .\test_active_dashboard_cache.py -ErrorAction SilentlyContinue
-```
-
-Check git status:
-
-```powershell
-git status
-```
-
-Show recent commits:
-
-```powershell
-git log --oneline -5
-```
+These are useful for commissioning/RCx discovery, but some broad municipal facility projects may require keyword tuning or manual-review suppression over time.
 
 ---
 
@@ -1012,7 +1040,9 @@ git log --oneline -5
 
 ### Add or edit keywords
 
-Edit the keyword lists in `config.py`:
+Edit `config.py`.
+
+For EM&V:
 
 ```python
 KEYWORDS_PRIMARY
@@ -1020,19 +1050,27 @@ KEYWORDS_SECONDARY
 KEYWORDS_TERTIARY
 ```
 
-Use primary terms for core EM&V language, secondary terms for program evaluation language, and tertiary terms for broader adjacent energy-efficiency language.
+For commissioning:
+
+```python
+COMMISSIONING_KEYWORDS_PRIMARY
+COMMISSIONING_KEYWORDS_SECONDARY
+COMMISSIONING_KEYWORDS_TERTIARY
+```
+
+Use primary terms for direct/core matches, secondary terms for related technical scope, and tertiary terms for broader project indicators.
 
 ### Add or disable a source
 
 Edit `UTILITY_SOURCES` or `DIRECT_SCRAPE_STATES` in `config.py`.
 
-To temporarily disable a source without deleting it:
+Disable a source without deleting it:
 
 ```python
 "active": False
 ```
 
-To mark a source as JavaScript-rendered and skip it until Phase 2:
+Mark a source as JavaScript-rendered and skip it until Phase 2:
 
 ```python
 "js_render": True
@@ -1043,49 +1081,32 @@ To mark a source as JavaScript-rendered and skip it until Phase 2:
 1. Add or update a source entry in `config.py` with a custom `type`.
 2. Add a branch for that type in `_scrape_by_type()` in `scrapers/web_sources.py`.
 3. Add the dedicated parser function in `scrapers/web_sources.py`.
-4. Test the parser function locally before running the full monitor.
+4. Test the parser function locally.
+5. Run the appropriate monitor dry run.
+6. Confirm source-health reporting behaves as expected.
 
-### Suppress a manual-review item from the dashboard
+### Suppress a manual-review item
 
-1. Open the dashboard.
+1. Open the relevant monitor dashboard.
 2. Expand the manual-review section.
 3. Click the X button on the item.
 4. Enter the dashboard removal token.
-5. Confirm the item disappears.
-6. Confirm a row was added to Supabase table `manual_review_suppressed`.
+5. Confirm the row disappears.
+6. Confirm a row was added to `manual_review_suppressed`.
 
 ### Un-suppress a manual-review item
 
-Delete the row from Supabase:
+Delete the relevant row from Supabase. Example:
 
 ```sql
 delete from public.manual_review_suppressed
-where monitor_type = 'emv'
+where monitor_type = 'commissioning'
   and unique_key = 'PASTE_UNIQUE_KEY_HERE';
 ```
 
-The item may reappear on the next dashboard generation if it is still scraped and still qualifies for manual review.
+### Remove an active dashboard opportunity
 
-### Inspect active dashboard opportunities
-
-Use:
-
-```sql
-select
-  source,
-  title,
-  deadline,
-  first_seen,
-  last_seen,
-  visible_until
-from public.opportunity_active
-where monitor_type = 'emv'
-order by visible_until, source, title;
-```
-
-### Remove an active dashboard opportunity manually
-
-Use only if an opportunity was cached incorrectly or should no longer appear before its visible-until date:
+Use only if an opportunity was cached incorrectly or should be removed before its `visible_until` date:
 
 ```sql
 delete from public.opportunity_active
@@ -1095,71 +1116,68 @@ where monitor_type = 'emv'
 
 ---
 
-## Known Issues / Future Work
-
-| Item                                        | Status / Next Step                                                                                                                                                                         |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| NYISO Procurement                           | Current configured URL returns 404. Need replacement source or disable source.                                                                                                             |
-| National Grid                               | JavaScript-rendered; requires Playwright or alternate static RFP feed.                                                                                                                     |
-| Avangrid / United Illuminating              | JavaScript-rendered; requires Playwright or targeted static page if available.                                                                                                             |
-| Google CSE                                  | Disabled because current Google project/API access is blocked. Re-enable only with an eligible API key/project.                                                                            |
-| Generic scrapers                            | Can still collect old PDFs or broader informational pages. Manual-review section helps surface these without polluting the main table.                                                     |
-| Source drift                                | Website redesigns may silently reduce candidates to zero. Active dashboard cache protects passing opportunities after first detection, but source-specific parsers still need maintenance. |
-| PJM solicitations                           | Configured URL appears broken or no longer exposes a useful solicitation page. Disable or replace once a reliable static PJM RFP/procurement source is identified.                         |
-| COMMBUYS noise                              | COMMBUYS can produce many below-threshold manual-review rows. Use suppression or source-specific filtering if it becomes too noisy.                                                        |
-| BED RFP detail pages                         | BED detail URLs may be Cloudflare-blocked from direct scraping. The parser uses the listing page and dynamic `/rfpdetail?rfp=...` links only, so BED items may remain manual review due to limited text. |
-| NYS Contract Reporter detail links          | NYSCR detail pages can require login. The parser extracts public listing fields and uses the CR number as the stable notice ID; dashboard links point back to the NYSCR search page.                   |
-| CT DEEP search-result metadata              | CT DEEP search results may not expose due dates. The parser filters heavily for energy-related RFP pages, but deadline fields may remain blank.                                             |
-| Local Supabase warning                      | Local dry runs may warn that `SUPABASE_URL` / `SUPABASE_KEY` are missing. This is expected unless those variables are set locally.                                                         |
-| Deprecation warning for `datetime.utcnow()` | Python may warn that `datetime.utcnow()` is deprecated in newer versions. This is not currently breaking the workflow but can be cleaned up later with timezone-aware datetimes.           |
-
----
-
 ## Deployment Checklist
 
-Before making the monitor fully live:
+Before merging a major monitor change to `main`:
 
-1. Confirm `EMAIL_FROM` and `EMAIL_TO` in `config.py`.
+1. Confirm the branch is clean except intentional changes:
 
-2. Confirm SendGrid sender/domain authentication.
+```powershell
+git status
+```
 
-3. Confirm GitHub Pages is set to deploy through GitHub Actions.
+2. Compile key Python files:
 
-4. Confirm GitHub Actions secrets:
+```powershell
+python -m py_compile source_health.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
+```
 
-   * `SAM_API_KEY`
-   * `SENDGRID_API_KEY`
-   * `SUPABASE_URL`
-   * `SUPABASE_KEY`
+3. Run both full dry runs:
 
-5. Confirm Supabase Edge Function secrets:
+```powershell
+python main.py --mode broad --monitor-type emv --sources all --dry-run
+python main.py --mode broad --monitor-type commissioning --sources all --dry-run
+```
 
-   * `RFP_ADMIN_TOKEN`
-   * `RFP_SUPABASE_URL`
-   * `RFP_SUPABASE_SERVICE_ROLE_KEY`
+4. Restore generated dashboard files if a local live run regenerated them unintentionally:
 
-6. Confirm Supabase tables:
+```powershell
+git restore docs/index.html docs/emv.html docs/commissioning.html
+```
 
-   * `opportunity_seen`
-   * `opportunity_active`
-   * `manual_review_suppressed`
+5. Confirm GitHub Actions secrets exist:
 
-7. Confirm scheduled Monday run is enabled.
+```text
+SAM_API_KEY
+SENDGRID_API_KEY
+SUPABASE_URL
+SUPABASE_KEY
+```
 
-8. Test feature-branch dashboard artifact before merge when code changes dashboard behavior.
+6. Confirm Supabase tables exist:
 
-9. Let the scheduled Monday run execute if validating schedule behavior.
+```text
+opportunity_seen
+opportunity_active
+manual_review_suppressed
+```
 
-10. After scheduled run completes, check:
+7. Confirm the Supabase Edge Function still exists and has the required secrets.
 
-* GitHub Actions run event is `schedule`.
-* Dashboard timestamp updated.
-* Email digest was sent.
-* AESP expired opportunities were skipped.
-* Entergy stale prior-year opportunities were skipped.
-* Active opportunities were loaded from `opportunity_active`.
-* Manual-review rows show X buttons.
-* Suppressed rows stay hidden after the next dashboard generation.
+8. Merge to `main`.
+
+9. Confirm the workflow runs successfully from `main`.
+
+10. After the next scheduled Monday run, check:
+    - both monitor runs executed;
+    - EM&V dashboard timestamp updated;
+    - commissioning dashboard timestamp updated;
+    - landing page links work;
+    - opportunity digest email behavior is as expected;
+    - source-health emails were sent for both monitors;
+    - Supabase active cache updated by monitor type;
+    - `opportunity_seen` rows are scoped correctly by monitor type;
+    - manual-review X buttons still work.
 
 ---
 
@@ -1173,28 +1191,56 @@ Check the workflow log for:
 SENDGRID_API_KEY not set. Skipping email delivery.
 ```
 
-For manual runs, make sure `send_email` was set to `true`.
+For manual workflow runs, `send_email` must be set to `true`.
 
 Also check:
 
-* `SENDGRID_API_KEY` exists in GitHub Actions secrets.
-* `EMAIL_FROM` is authorized in SendGrid.
-* Recipients are listed in `EMAIL_TO`.
+- `SENDGRID_API_KEY` exists in GitHub Actions secrets;
+- `EMAIL_FROM` is authorized in SendGrid;
+- the relevant recipient list in `config.py` is correct.
+
+### Source-health email did not send
+
+Check the workflow log for:
+
+```text
+SENDGRID_API_KEY not set. Skipping source health email.
+```
+
+The source-health email uses the same `SENDGRID_API_KEY` as the opportunity digest.
+
+For manual workflow runs, `send_email` must be set to `true` for the source-health email to send.
 
 ### Dashboard did not deploy
 
-Check whether the workflow was run from `main`.
+Check whether the workflow ran from `main`.
 
-Feature branches upload a preview artifact but do not deploy to GitHub Pages.
+Feature branches upload a dashboard preview artifact but do not deploy to GitHub Pages.
 
-Also check the live dashboard timestamp. If it is old, the workflow has not regenerated and published the dashboard yet.
+Also check whether the run was a dry run. Dry-run workflow dispatches do not upload/deploy dashboard files.
+
+### Dashboard landing page is updated but one monitor page is stale
+
+The landing page is regenerated whenever `generate_dashboard()` runs for either monitor. Each monitor dashboard is written only when that monitor run generates its dashboard.
+
+On scheduled production runs, both monitor dashboards should be regenerated because the workflow runs both monitor types sequentially.
 
 ### Dashboard does not show an expected RFP
 
-Check whether the RFP exists in the active cache:
+Check:
+
+1. Did the source return candidates?
+2. Did the item pass the scoring threshold for the selected monitor?
+3. Is it in the manual-review section?
+4. Is it suppressed in `manual_review_suppressed`?
+5. Is it cached in `opportunity_active`?
+6. Is `visible_until` still today or later?
+
+Query:
 
 ```sql
 select
+  monitor_type,
   source,
   title,
   deadline,
@@ -1206,131 +1252,97 @@ where monitor_type = 'emv'
   and title ilike '%PASTE PART OF TITLE HERE%';
 ```
 
-If it is in `opportunity_active` and `visible_until` is today or later, it should appear in the dashboard after a successful dashboard-generation run.
-
-If it is not in `opportunity_active`, the opportunity may not have passed scoring on any successful non-dry run after the active-cache feature was added.
-
 ### Dashboard shows an old RFP
 
 Check the `visible_until` date in `opportunity_active`.
 
-If it has a deadline, the row is expected to remain visible through the deadline.
-
-If it has no deadline, the row is expected to remain visible for 30 days from `first_seen`.
-
-If the row should be removed early, delete it manually from `opportunity_active`.
-
-### X buttons are missing from the live dashboard
-
-The live dashboard was probably generated before the X-button code was merged.
-
-Check:
-
-1. GitHub Actions has run successfully from `main` after the merge.
-2. GitHub Pages deployment completed.
-3. Browser cache has been refreshed.
-
-Use:
-
-```text
-Ctrl + F5
-```
-
-### X button asks for a token
-
-This is expected.
-
-The dashboard is static/public HTML and cannot safely contain the token. The first authorized user action must enter the dashboard removal token. The browser stores it in localStorage for future X clicks.
+If it has a deadline, it is expected to remain visible through the deadline. If it has no deadline, it is expected to remain visible for 30 days from `first_seen`.
 
 ### X button returns Unauthorized
 
-The entered token does not match the Supabase Edge Function secret `RFP_ADMIN_TOKEN`.
+The entered token does not match the Supabase Edge Function secret:
 
-Fix:
+```text
+RFP_ADMIN_TOKEN
+```
 
-1. Confirm the correct token value.
-2. Re-enter the token.
-3. Clear browser localStorage if the browser saved an old token.
-4. If necessary, reset `RFP_ADMIN_TOKEN` in Supabase and test again.
+Clear browser localStorage or re-enter the correct token.
 
 ### X button returns Invalid API key
 
-The Supabase Edge Function secret `RFP_SUPABASE_SERVICE_ROLE_KEY` is wrong or stale.
-
-Fix the Supabase Function secret and redeploy/retest if needed.
-
-### Active dashboard cache did not update
-
-Check the workflow log for messages like:
+The Supabase Edge Function secret is wrong or stale:
 
 ```text
-Active dashboard cache: upserted X passing opportunities
-Active dashboard cache: loaded X active opportunities
-Active dashboard merge: X current + Y cached = Z dashboard opportunities
+RFP_SUPABASE_SERVICE_ROLE_KEY
 ```
 
-If the log says Supabase is unavailable, confirm GitHub Actions secrets:
-
-```text
-SUPABASE_URL
-SUPABASE_KEY
-```
-
-Also confirm the `opportunity_active` table exists and service-role grants were applied.
-
-### Too many false positives
-
-Options:
-
-* Switch mode from `broad` to `medium`.
-* Raise `MIN_SCORE_INCLUDE_BROAD`.
-* Move broad terms from tertiary to commented-out.
-* Add source-specific excludes in a dedicated parser.
-* Keep broad mode but use the manual-review section for lower-confidence items.
-* Suppress repeated manual-review noise with the dashboard X button.
-
-### Real opportunities are missing
-
-Options:
-
-* Lower the relevant score threshold.
-* Promote a keyword from tertiary to secondary or secondary to primary.
-* Add missing source-specific terms.
-* Inspect whether the source page changed and the scraper returned zero candidates.
-* Add a dedicated parser for that source.
-* Check whether the item is present in `opportunity_active` but has expired from the dashboard.
+Update the Supabase Function secret and redeploy if needed.
 
 ### Duplicate opportunities are appearing
 
 Check:
 
-* Supabase credentials are configured in GitHub Actions.
-* `opportunity_seen` table exists.
-* `save_seen_set()` succeeded after the prior run.
-* `force_all` was not set to `true`.
+- Supabase credentials are configured in GitHub Actions;
+- `opportunity_seen` exists;
+- `save_seen_set()` succeeded after the prior run;
+- `force_all` was not set to `true`;
+- the source did not change notice IDs/URLs for the same posting.
 
-### AESP expired opportunities appear
+### Too many false positives
 
-Check whether the AESP listing has a parseable `Due:` date. The current filter only skips items when a deadline is successfully parsed and the date is before today.
+Options:
 
-### Entergy stale-year opportunities appear
+- switch the relevant monitor from `broad` to `medium`;
+- raise the relevant monitor threshold;
+- move a broad keyword from tertiary to commented-out;
+- replace broad project terms with narrower phrases;
+- add source-specific excludes in a dedicated parser;
+- use manual-review suppression for repeated low-value manual-review rows.
 
-Check whether the posting title includes a recognizable year. The current stale filter is year-based.
+### Real opportunities are missing
+
+Options:
+
+- inspect source-health records for zero candidates or exceptions;
+- check whether the source page changed;
+- add or fix a dedicated parser;
+- add missing keywords;
+- promote a keyword to a higher tier;
+- lower the relevant monitor threshold;
+- check whether the item is present in manual review but below threshold;
+- check whether it is in `opportunity_active` but expired from the dashboard.
+
+---
+
+## Known Issues / Future Work
+
+| Item | Status / Next Step |
+| --- | --- |
+| Source-health persistence | Health records are currently in-memory and email-only. Add Supabase persistence later to trend repeated zero-candidate sources and repeated failures. |
+| Vermont VSIGNS health code | Recent local runs show a DNS/name-resolution warning, but V1 records `HEALTH_WARN_ZERO` because the fetch helper returns an empty result. Future health tracking should distinguish fetch failure from true zero candidates. |
+| NYISO Procurement | Current configured URL has returned 404. Need replacement URL or disable source. |
+| National Grid | JavaScript-rendered; requires Playwright or alternate static/feed source. |
+| Avangrid / United Illuminating | JavaScript-rendered; requires Playwright or alternate static/feed source. |
+| Google CSE | Disabled in `main.py`; keep disabled unless an eligible working Google CSE project/API key is available. |
+| Generic scrapers | Can collect old PDFs, informational pages, or broad procurement rows. Dedicated parsers and manual-review suppression help manage noise. |
+| Source drift | Website redesigns may cause sources to return zero candidates without raising exceptions. Source-health email helps identify this, but persistent trend tracking is still future work. |
+| BED detail pages | Detail pages may be Cloudflare-blocked. Parser uses listing links and may have limited scope/deadline text. |
+| NYSCR detail links | Detail pages may require login. Parser uses public listing fields and stable CR numbers. |
+| CT DEEP metadata | Search-result metadata may not expose due dates. |
+| Local Supabase warnings | Expected when local shells do not define `SUPABASE_URL` and `SUPABASE_KEY`. |
+| `datetime.utcnow()` deprecation warning | Newer Python versions may warn that `datetime.utcnow()` is deprecated. This warning is not currently breaking the workflow but should be cleaned up later with timezone-aware UTC datetimes. |
 
 ---
 
 ## Notes for Future Developers
 
-The code is intentionally organized so most routine tuning happens in `config.py`.
-
-Use dedicated parsers for important sources when generic scraping creates false positives. The dedicated parser approach is currently used for several sources where page structure, deadline context, or closed/open status matters.
-
-The dashboard is static HTML with client-side filtering. It does not require a server.
-
-The active dashboard cache is managed server-side through the Python workflow and Supabase. It exists to keep valid RFPs visible until their due date or for 30 days if no due date is available.
-
-The dashboard X button is implemented with client-side JavaScript calling a Supabase Edge Function. The token is never committed to the repository or embedded in the static dashboard.
-
-The monitor is designed for partial success. One broken source should not stop the full run.
-
-Do not commit generated local dashboard tests unless that is intentional. In normal operation, the GitHub Actions workflow regenerates `docs/index.html`.
+- Routine tuning should happen in `config.py` whenever possible.
+- Use dedicated parsers for important sources when generic scraping creates false positives.
+- Do not commit generated local dashboard files unless the dashboard output change is intentional.
+- Dry runs are the safest way to test scrapers and scoring.
+- Manual live local runs can send emails and update Supabase if credentials are set.
+- The dashboard is static HTML and does not require a server.
+- The active dashboard cache is managed by the Python workflow and Supabase.
+- The manual-review X button uses a Supabase Edge Function; secrets are not embedded in static HTML.
+- Source-health email is currently operational but not persistent.
+- The scheduled production workflow must be merged to `main` to affect Monday’s scheduled run.
