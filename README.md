@@ -245,8 +245,8 @@ rfp-monitor/
 |           `-- index.ts                         # Edge Function used by dashboard X button
 `-- .github/
     `-- workflows/
-        `-- rfp_monitor.yml                      # GitHub Actions workflow
-```
+        |-- rfp_monitor.yml                      # RFP monitor workflow
+        `-- supabase_keepalive.yml               # Daily Supabase keepalive workflow
 
 ---
 
@@ -303,6 +303,13 @@ GitHub -> Actions -> CxA RFP Monitor -> Run workflow
 | `send_email` | If `true`, exposes `SENDGRID_API_KEY` to the run and allows emails. If `false`, opportunity and source-health emails are skipped. |
 
 Manual runs execute only the selected `monitor_type`.
+
+### Supabase Keepalive Workflow
+
+The repository also includes a separate lightweight workflow:
+
+```text
+.github/workflows/supabase_keepalive.yml
 
 ### GitHub Pages Behavior
 
@@ -449,7 +456,7 @@ This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STAT
 | NEEP (Northeast Energy Efficiency Partnerships) | `neep_rfps` |
 | ACEEE | inactive |
 | E4TheFuture | inactive |
-| NYSERDA | generic list |
+| NYSERDA | `nyserda_current_funding`; API-backed parser for current PON/RFP/RFI/RFQ/RFQL listings |
 | ISO-NE Solicitations | generic list |
 | Eversource (MA/CT/NH) | generic list |
 | Green Mountain Power | generic list |
@@ -475,7 +482,7 @@ This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STAT
 | --- | --- |
 | Vermont VSIGNS | `vsigns`; known connection/DNS issue in recent local runs |
 | Massachusetts COMMBUYS | `commbuys` |
-| NYSERDA Funding (direct) | generic list |
+| NYSERDA Funding (direct) | inactive; disabled to avoid duplicate scraping because NYSERDA is covered in `UTILITY_SOURCES` |
 | California CaleProcure | `ca_eprocure` |
 | SUNY SUCF Construction Bid Calendar | `suny_sucf_bid_calendar_pdf` |
 | NYS Contract Reporter | `nyscr_contract_reporter` |
@@ -983,6 +990,14 @@ HEALTH_WARN_ZERO
 ```
 
 This is a known V1 limitation because the lower-level fetch helper returned an empty result rather than raising an exception through the source wrapper.
+
+### NYSERDA
+
+NYSERDA is covered through the dedicated `nyserda_current_funding` parser. This parser uses NYSERDA’s current funding opportunities page and captures current PON/RFP/RFI/RFQ/RFQL listings, including notice IDs, descriptions, solicitation type, and due dates.
+
+The duplicate direct NYSERDA source is disabled to avoid returning the same NYSERDA opportunities twice.
+
+Known limitation: NYSERDA items currently link back to the current funding opportunities landing page rather than individual detail pages.
 
 ### NYISO Procurement
 
