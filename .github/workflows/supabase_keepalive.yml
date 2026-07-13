@@ -1,0 +1,38 @@
+﻿name: Supabase Keepalive
+
+on:
+  schedule:
+    # Daily lightweight Supabase read to reduce risk of Free Plan inactivity pause.
+    # Runs at 13:17 UTC, separate from the RFP monitor schedule.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Supabase database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_KEY:-}" ]; then
+            echo "SUPABASE_URL or SUPABASE_KEY is not set."
+            exit 1
+          fi
+
+          echo "Running lightweight Supabase keepalive query..."
+
+          curl --fail --silent --show-error \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/opportunity_seen?select=monitor_type&limit=1"
+
+          echo ""
+          echo "Supabase keepalive query completed."
