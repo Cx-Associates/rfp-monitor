@@ -1,11 +1,13 @@
 # CxA RFP Monitor
 
-Automated scanner for RFP/RFQ/RFI opportunities relevant to Cx Associates. The same codebase currently supports two monitor types:
+Automated scanner for RFP/RFQ/RFI opportunities relevant to Cx Associates.
+
+The same codebase currently supports two monitor types:
 
 1. **EM&V / Evaluation** (`emv`)
 2. **Commissioning / RCx** (`commissioning`)
 
-The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, and state/municipal sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, and sends separate source-health emails after each non-dry run.
+The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, state, municipal, and priority procurement sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, and sends separate source-health emails after each non-dry run.
 
 ---
 
@@ -28,6 +30,8 @@ python main.py --mode broad --monitor-type commissioning --sources all
 
 Each monitor run is independent. Each run has its own monitor type, keyword set, score thresholds, dashboard output path, opportunity email recipients, source-health records, and Supabase table scope.
 
+Scheduled runs automatically expose `SENDGRID_API_KEY` to the Python process, so scheduled runs are expected to send opportunity digest emails and source-health emails if the GitHub secret is configured.
+
 ---
 
 ## Outputs
@@ -38,7 +42,7 @@ The monitor produces three categories of outputs.
 
 The opportunity digest is sent through SendGrid.
 
-It reports newly identified passing opportunities only. It does not re-email opportunities that were already saved to the Supabase seen-set unless deduplication is bypassed with `--force-all` or Supabase is unavailable.
+It reports newly identified passing opportunities only. It does not re-email opportunities already saved to the Supabase seen-set unless deduplication is bypassed with `--force-all` or Supabase is unavailable.
 
 Current opportunity digest subjects are monitor-specific:
 
@@ -93,10 +97,26 @@ The dashboard has:
 
 - a main opportunity table for opportunities that pass the scoring threshold;
 - an active opportunity cache so previously identified passing opportunities remain visible until their deadline, or for 30 days when no deadline is available;
-- a collapsed manual-review section for filtered below-threshold opportunities;
-- manual-review X buttons that call a Supabase Edge Function and write suppression records;
+- a collapsed manual-review section for filtered below-threshold / low-score opportunities;
+- live team-review fields for each row:
+  - Review Status;
+  - Reviewer Fit;
+  - Tech Owner;
+  - Admin Owner;
+  - Admin reviewed;
+  - EM&V tech reviewed;
+  - Cx tech reviewed;
+  - Technical Review Notes;
+  - Admin Review Notes;
+- review-field loading and saving through the `opportunity-review` Supabase Edge Function;
+- manual-review promotion logic that can move reviewed manual candidates into the main dashboard table;
+- a visible **Promoted from Manual Review** badge for manually promoted rows;
+- preservation of the original automated confidence score when a row is promoted manually;
+- manual-review X buttons that call the `suppress-manual-review` Supabase Edge Function and write suppression records;
 - client-side filtering/searching;
-- a "NEW" indicator for opportunities newly identified in the current run.
+- a `NEW` indicator for opportunities newly identified in the current run.
+
+Manual promotion does not change the automated scoring result. It adds a human-review layer on top of the automated score so the team can intentionally surface a below-threshold or low-confidence item in the main dashboard while still seeing how the monitor originally scored it.
 
 ### 3. Source-Health Email
 
@@ -123,7 +143,7 @@ Examples:
 [CxA RFP Monitor Health] Commissioning / RCx source report - July 10, 2026 (0 errors, 12 warnings)
 ```
 
-Source-health reporting is currently **in-memory and email-only**. It is not yet persisted to Supabase. A future enhancement should persist health results so we can trend sources that repeatedly return zero candidates or repeatedly fail.
+Source-health reporting is currently **in-memory and email-only**. It is not yet persisted to Supabase. A future enhancement should persist health results so repeated zero-candidate sources and repeated failures can be trended.
 
 ---
 
@@ -147,7 +167,7 @@ Each monitor run follows this flow:
 6. Score raw opportunities with the keyword set for the selected monitor type.
 7. Split scored opportunities into:
    - passing opportunities;
-   - below-threshold manual-review candidates;
+   - manual-review candidates;
    - all scored opportunities.
 8. Filter manual-review candidates to remove obvious navigation/support-page noise.
 9. Load manual-review suppressions from Supabase and remove suppressed manual-review rows.
@@ -168,6 +188,7 @@ Important behavior:
 - The **source-health email** is for source monitoring and troubleshooting.
 - A broken source should not stop the full run.
 - Dry runs stop before delivery and state update.
+- If both email and dashboard delivery fail, opportunities are not marked as seen so the next run can retry delivery.
 
 ---
 
@@ -226,7 +247,7 @@ rfp-monitor/
 |-- config.py                                    # Keywords, sources, thresholds, monitor settings, email settings
 |-- models.py                                    # Opportunity dataclass and shared utilities
 |-- scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
-|-- dedup.py                                     # Supabase deduplication, active cache, and suppression filtering
+|-- dedup.py                                     # Supabase deduplication, active cache, suppression filtering, active-cache reload
 |-- delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
 |-- source_health.py                             # In-memory source-health records and health-code summary
 |-- requirements.txt                             # Python dependencies
@@ -240,13 +261,19 @@ rfp-monitor/
 |   |-- web_sources.py                           # Utility/quasi-public and direct state/municipal scrapers
 |   `-- google_cse.py                            # Google CSE scraper, currently disabled in main.py
 |-- supabase/
-|   `-- functions/
-|       `-- suppress-manual-review/
-|           `-- index.ts                         # Edge Function used by dashboard X button
+|   |-- functions/
+|   |   |-- opportunity-review/
+|   |   |   `-- index.ts                         # Review-field save/load and manual-promotion Edge Function
+|   |   `-- suppress-manual-review/
+|   |       `-- index.ts                         # Manual-review X-button suppression Edge Function
+|   |-- sql/
+|   |   `-- 001_opportunity_review_status.sql    # Review table setup
+|   `-- .temp/                                  # Local Supabase CLI temp files; should be ignored by git
 `-- .github/
     `-- workflows/
         |-- rfp_monitor.yml                      # RFP monitor workflow
         `-- supabase_keepalive.yml               # Daily Supabase keepalive workflow
+```
 
 ---
 
@@ -283,7 +310,7 @@ Expected scheduled output volume if both runs complete and SendGrid is available
 1 commissioning source-health email
 ```
 
-The opportunity digest may be a "No new RFPs this week" email if no new passing opportunities survive deduplication.
+The opportunity digest may be a `No new RFPs this week` email if no new passing opportunities survive deduplication.
 
 ### Manual Workflow Inputs
 
@@ -304,12 +331,7 @@ GitHub -> Actions -> CxA RFP Monitor -> Run workflow
 
 Manual runs execute only the selected `monitor_type`.
 
-### Supabase Keepalive Workflow
-
-The repository also includes a separate lightweight workflow:
-
-```text
-.github/workflows/supabase_keepalive.yml
+Manual runs only send email when `send_email` is set to `true`. This includes the opportunity digest and the source-health email.
 
 ### GitHub Pages Behavior
 
@@ -318,6 +340,7 @@ Dashboard generation and GitHub Pages deployment are separated.
 - Feature branches upload a downloadable `rfp-dashboard-preview` artifact.
 - `main` deploys to GitHub Pages.
 - Dry-run workflow dispatches do not upload/deploy dashboards.
+- There is no separate `push` trigger in the workflow. Dashboard deployment occurs when the workflow itself runs from `main`.
 
 The preview/deploy artifact includes:
 
@@ -325,6 +348,29 @@ The preview/deploy artifact includes:
 docs/index.html
 docs/emv.html
 docs/commissioning.html
+```
+
+### Supabase Keepalive Workflow
+
+The repository also includes a separate lightweight workflow:
+
+```text
+.github/workflows/supabase_keepalive.yml
+```
+
+It runs daily at:
+
+```text
+17 13 * * *
+```
+
+That is 13:17 UTC.
+
+The keepalive workflow performs a lightweight Supabase REST query against `opportunity_seen` to reduce the risk of free-plan inactivity pause. It uses the same GitHub Actions secrets as the Python workflow:
+
+```text
+SUPABASE_URL
+SUPABASE_KEY
 ```
 
 ---
@@ -482,7 +528,6 @@ This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STAT
 | --- | --- |
 | Vermont VSIGNS | `vsigns`; known connection/DNS issue in recent local runs |
 | Massachusetts COMMBUYS | `commbuys` |
-| NYSERDA Funding (direct) | inactive; disabled to avoid duplicate scraping because NYSERDA is covered in `UTILITY_SOURCES` |
 | California CaleProcure | `ca_eprocure` |
 | SUNY SUCF Construction Bid Calendar | `suny_sucf_bid_calendar_pdf` |
 | NYS Contract Reporter | `nyscr_contract_reporter` |
@@ -505,6 +550,8 @@ This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STAT
 | Maine BGS Business Opportunities | `maine_bgs_business_opportunities` |
 | University of Maine System Upcoming Bids | `umaine_upcoming_bids` |
 | Connecticut Energy Efficiency Board RFPs | `ct_eeb_rfps` |
+
+The old direct NYSERDA source is not part of the current direct-source inventory. NYSERDA is covered through the dedicated API-backed utility/quasi-public parser.
 
 ---
 
@@ -553,7 +600,7 @@ HEALTH_WARN_ZERO
 
 because the underlying fetch returned an empty result rather than raising an exception through the source wrapper.
 
-This should be noted in internal launch/update communication. A future source-health persistence update should distinguish:
+A future source-health persistence update should distinguish:
 
 ```text
 true zero candidates
@@ -579,7 +626,9 @@ The monitor uses Supabase for:
 
 1. opportunity email deduplication;
 2. active dashboard persistence;
-3. manual-review suppression.
+3. manual-review suppression;
+4. dashboard review-field storage;
+5. manual-review promotion persistence.
 
 Current tables:
 
@@ -587,9 +636,10 @@ Current tables:
 opportunity_seen
 opportunity_active
 manual_review_suppressed
+opportunity_review_status
 ```
 
-All three tables are scoped by `monitor_type`.
+All opportunity-state tables are scoped by `monitor_type` where applicable.
 
 The same source/opportunity can therefore exist independently for:
 
@@ -599,6 +649,8 @@ commissioning
 ```
 
 This is intentional. It prevents the EM&V monitor from hiding or deduplicating commissioning results, and vice versa.
+
+The review table uses a shared `review_key` so the same opportunity can carry review data across both dashboards when the source and notice ID match.
 
 ### Important Import/Environment Behavior
 
@@ -648,7 +700,7 @@ Entries expire after:
 STATE_EXPIRY_DAYS = 180
 ```
 
-Recommended checks:
+Recommended check:
 
 ```sql
 select
@@ -678,7 +730,7 @@ order by date_found desc, source, title;
 
 ## Supabase Table: `opportunity_active`
 
-Stores passing opportunities that should remain visible on the dashboard.
+Stores opportunities that should remain visible on the dashboard. This includes automatically passing opportunities and manually promoted review candidates.
 
 Expected schema:
 
@@ -713,8 +765,10 @@ Visibility rules:
 | --- | --- |
 | Has deadline | Equal to the deadline date. |
 | No deadline | 30 days after `first_seen`. |
+| Manually promoted with deadline | Equal to the deadline date. |
+| Manually promoted without deadline | 30 days after first promotion / first active-cache record. |
 
-Recommended checks:
+Recommended check:
 
 ```sql
 select
@@ -742,6 +796,131 @@ select
 from public.opportunity_active
 where monitor_type = 'emv'
 order by visible_until, source, title;
+```
+
+Check promoted manual rows:
+
+```sql
+select
+  monitor_type,
+  unique_key,
+  source,
+  title,
+  deadline,
+  visible_until,
+  opportunity ->> 'confidence' as confidence,
+  opportunity ->> 'promoted_from_manual_review' as promoted_from_manual_review,
+  opportunity ->> 'manual_promoted' as manual_promoted,
+  opportunity ->> 'promotion_label' as promotion_label,
+  last_seen
+from public.opportunity_active
+where opportunity ->> 'promoted_from_manual_review' = 'true'
+order by last_seen desc nulls last
+limit 20;
+```
+
+---
+
+## Supabase Table: `opportunity_review_status`
+
+Stores live dashboard team-review fields. The dashboards load these records on page load and save them through the `opportunity-review` Edge Function.
+
+Canonical setup SQL is stored at:
+
+```text
+supabase/sql/001_opportunity_review_status.sql
+```
+
+Expected schema:
+
+```sql
+create table if not exists public.opportunity_review_status (
+  review_key text primary key,
+  source text,
+  notice_id text,
+  title text,
+  url text,
+
+  review_status text,
+  reviewer_fit text,
+  tech_owner text,
+  admin_owner text,
+
+  admin_reviewed boolean not null default false,
+  emv_technical_reviewed boolean not null default false,
+  commissioning_technical_reviewed boolean not null default false,
+
+  technical_review_notes text,
+  admin_review_notes text,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by text
+);
+```
+
+Expected indexes:
+
+```sql
+create index if not exists idx_opportunity_review_status_source
+on public.opportunity_review_status (source);
+
+create index if not exists idx_opportunity_review_status_notice_id
+on public.opportunity_review_status (notice_id);
+```
+
+Expected grants:
+
+```sql
+grant usage on schema public to service_role;
+
+grant select, insert, update, delete
+on public.opportunity_review_status
+to service_role;
+```
+
+Recommended check:
+
+```sql
+select
+  review_key,
+  source,
+  title,
+  review_status,
+  reviewer_fit,
+  tech_owner,
+  admin_owner,
+  admin_reviewed,
+  emv_technical_reviewed,
+  commissioning_technical_reviewed,
+  technical_review_notes,
+  admin_review_notes,
+  updated_at
+from public.opportunity_review_status
+order by updated_at desc
+limit 50;
+```
+
+Check a specific title:
+
+```sql
+select
+  review_key,
+  source,
+  title,
+  review_status,
+  reviewer_fit,
+  tech_owner,
+  admin_owner,
+  admin_reviewed,
+  emv_technical_reviewed,
+  commissioning_technical_reviewed,
+  technical_review_notes,
+  admin_review_notes,
+  updated_at
+from public.opportunity_review_status
+where title ilike '%PASTE PART OF TITLE HERE%'
+order by updated_at desc;
 ```
 
 ---
@@ -791,17 +970,37 @@ order by suppressed_at desc, monitor_type, source, title;
 
 ---
 
-## Manual-Review Suppression / Dashboard X Button
+## Dashboard Review Fields, Manual Promotion, and Manual-Review Suppression
 
-The dashboard manual-review section includes an X button on each manual-review row.
+The dashboards are static HTML files, but they have live review-field behavior through Supabase Edge Functions.
 
-Clicking the X button:
+There are two related dashboard write paths:
 
-1. Prompts the user for the dashboard removal token if the browser does not already have one.
-2. Sends a POST request to the Supabase Edge Function.
-3. Writes a row to `manual_review_suppressed`.
-4. Removes the row from the current page immediately.
-5. Keeps the row hidden from future dashboard generations for the same monitor type.
+| Dashboard action | Edge Function | Supabase table affected |
+| --- | --- | --- |
+| Load review fields | `opportunity-review` | reads `opportunity_review_status` |
+| Save review fields | `opportunity-review` | upserts `opportunity_review_status` |
+| Promote eligible manual row | `opportunity-review` | upserts `opportunity_active` |
+| Remove no-longer-eligible manual promotion | `opportunity-review` | deletes matching row from `opportunity_active` |
+| Hide manual-review row with X button | `suppress-manual-review` | upserts `manual_review_suppressed` |
+
+### Review Fields
+
+Review fields include:
+
+```text
+Review Status
+Reviewer Fit
+Tech Owner
+Admin Owner
+Admin reviewed
+EM&V tech reviewed
+Cx tech reviewed
+Technical Review Notes
+Admin Review Notes
+```
+
+The dashboard can load review data without a user-entered token. Saving review data requires the dashboard edit token.
 
 The dashboard sends the token as:
 
@@ -817,9 +1016,87 @@ rfpAdminToken
 
 The static dashboard does not contain the token or the Supabase service-role key.
 
-### Supabase Edge Function
+### Manual Promotion Rules
 
-Function name:
+Manual-review rows can be promoted into the main dashboard when human review indicates that the item should be watched despite the automated score.
+
+A row is promoted only when all of the following are complete:
+
+1. **Reviewer Fit** is filled and is not `Poor Fit`.
+2. **Review Status** is filled.
+3. Either **Technical Review Notes** or **Admin Review Notes** is filled.
+4. At least one review-complete checkbox is checked:
+   - Admin reviewed;
+   - EM&V tech reviewed;
+   - Cx tech reviewed.
+5. At least one owner field is filled:
+   - Tech Owner;
+   - Admin Owner.
+
+Manual-review section membership is the source of truth for promotion eligibility. A row does not need to have the literal confidence label `Below threshold`; low-confidence manual-review rows can also be promoted if the human review criteria above are complete.
+
+When a row is promoted:
+
+- it moves into the main dashboard table immediately in the browser;
+- it receives a **Promoted from Manual Review** badge;
+- it keeps the original automated confidence label, such as `Low` or `Below threshold`;
+- it is visually highlighted using the promoted-manual row style;
+- it is saved to `opportunity_active` by the `opportunity-review` Edge Function;
+- it remains visible through its deadline, or for 30 days if no deadline exists.
+
+If a promoted manual row later no longer satisfies the promotion criteria, the dashboard moves it back to the manual-review section and the Edge Function removes the manual-promotion row from `opportunity_active`.
+
+### Manual Promotion Persistence
+
+When a manual-review row satisfies the promotion criteria, the `opportunity-review` Edge Function writes a promoted row to:
+
+```text
+public.opportunity_active
+```
+
+The saved opportunity JSON includes:
+
+```text
+promoted_from_manual_review = true
+promotion_label = Promoted from Manual Review
+```
+
+The promoted row keeps the original automated confidence label. The dashboard therefore can show, for example, a `Low` confidence row in the main table with a **Promoted from Manual Review** badge.
+
+### Manual-Review Suppression / Dashboard X Button
+
+The dashboard manual-review section includes an X button on each manual-review row.
+
+Clicking the X button:
+
+1. Prompts the user for the dashboard removal/edit token if the browser does not already have one.
+2. Sends a POST request to the `suppress-manual-review` Supabase Edge Function.
+3. Writes a row to `manual_review_suppressed`.
+4. Removes the row from the current page immediately.
+5. Keeps the row hidden from future dashboard generations for the same monitor type.
+
+### Supabase Edge Functions
+
+Review and promotion function:
+
+```text
+opportunity-review
+```
+
+Endpoint currently used by the generated dashboard JavaScript:
+
+```text
+https://udxcbyoohgzdkjxytxzg.functions.supabase.co/opportunity-review
+```
+
+Supported actions:
+
+| Action | Requires dashboard token? | Behavior |
+| --- | --- | --- |
+| `list` | No user-entered token | Loads review records by `review_key`. |
+| `save` | Yes | Saves review fields and updates/removes active-cache manual promotion as applicable. |
+
+Manual-review suppression function:
 
 ```text
 suppress-manual-review
@@ -831,6 +1108,12 @@ Endpoint currently used by the generated dashboard JavaScript:
 https://udxcbyoohgzdkjxytxzg.functions.supabase.co/suppress-manual-review
 ```
 
+Supported behavior:
+
+| Function | Requires dashboard token? | Behavior |
+| --- | --- | --- |
+| `suppress-manual-review` | Yes | Upserts a suppression row into `manual_review_suppressed`. |
+
 Expected Supabase Edge Function secrets:
 
 ```text
@@ -841,11 +1124,14 @@ RFP_SUPABASE_SERVICE_ROLE_KEY
 
 These are Supabase secrets, not GitHub Actions secrets.
 
-Deploy command:
+Deploy commands:
 
 ```powershell
-supabase functions deploy suppress-manual-review --no-verify-jwt
+supabase functions deploy opportunity-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
+supabase functions deploy suppress-manual-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
 ```
+
+Deploy with `--no-verify-jwt` because the dashboards are hosted as public static HTML on GitHub Pages. Write protection is handled by the custom `x-rfp-admin-token` header.
 
 ---
 
@@ -870,7 +1156,7 @@ Do not commit secret values to the repository.
 
 Important distinction:
 
-- `SUPABASE_URL` and `SUPABASE_KEY` are GitHub Actions secrets used by the Python workflow.
+- `SUPABASE_URL` and `SUPABASE_KEY` are GitHub Actions secrets used by the Python workflow and keepalive workflow.
 - `RFP_ADMIN_TOKEN`, `RFP_SUPABASE_URL`, and `RFP_SUPABASE_SERVICE_ROLE_KEY` are Supabase Edge Function secrets.
 
 ---
@@ -889,7 +1175,7 @@ Two modes are available:
 Scoring weights:
 
 | Match Type | Points |
-| --- | --- |
+| --- | ---: |
 | Primary keyword match | 10 |
 | Secondary keyword match | 5 |
 | Tertiary keyword match | 2 |
@@ -901,9 +1187,10 @@ Confidence labels:
 
 | Label | Rule |
 | --- | --- |
-| High | Score at or above `MIN_SCORE_HIGH_CONFIDENCE` |
-| Medium | Score is at or above the monitor/mode inclusion threshold but below high-confidence threshold |
-| Below threshold | Score below the monitor/mode inclusion threshold |
+| High | Score at or above `MIN_SCORE_HIGH_CONFIDENCE`. |
+| Medium | Score is at or above the monitor/mode inclusion threshold but below high-confidence threshold. |
+| Low | Used for active/manual/persisted rows when applicable. |
+| Below threshold | Score below the monitor/mode inclusion threshold. |
 
 Current high-confidence threshold:
 
@@ -925,14 +1212,14 @@ Current inclusion thresholds:
 The code separates results into:
 
 1. passing opportunities;
-2. below-threshold manual-review candidates;
+2. manual-review candidates;
 3. all scored opportunities.
 
-The dashboard displays passing and active cached opportunities in the main table. A filtered subset of below-threshold opportunities appears in the collapsed manual-review section.
+The dashboard displays passing and active cached opportunities in the main table. A filtered subset of below-threshold or low-score opportunities appears in the collapsed manual-review section.
 
 Manual-review filtering removes obvious navigation/support links and other low-value rows. Suppressed manual-review rows are removed before dashboard generation.
 
-The manual-review section is intentionally broad. It is useful for spotting possible missed opportunities and reviewing noisy source behavior without pushing those rows into the main opportunity table or email digest.
+The manual-review section is intentionally broad. It is useful for spotting possible missed opportunities and reviewing noisy source behavior without pushing those rows into the main opportunity table or email digest automatically.
 
 ---
 
@@ -993,9 +1280,13 @@ This is a known V1 limitation because the lower-level fetch helper returned an e
 
 ### NYSERDA
 
-NYSERDA is covered through the dedicated `nyserda_current_funding` parser. This parser uses NYSERDA’s current funding opportunities page and captures current PON/RFP/RFI/RFQ/RFQL listings, including notice IDs, descriptions, solicitation type, and due dates.
+NYSERDA is covered through the dedicated `nyserda_current_funding` parser. This parser uses NYSERDA’s current funding opportunities data and captures current procurement-style RFP/RFI/RFQ/RFQL listings, including notice IDs, descriptions, solicitation type, and due dates.
 
-The duplicate direct NYSERDA source is disabled to avoid returning the same NYSERDA opportunities twice.
+The NYSERDA API also includes broad funding/program opportunities in addition to procurement-style RFPs/RFQs/RFIs/RFQLs. Program Opportunity Notices (PONs) are intentionally excluded from the monitor because they are generally funding, incentive, training, loan, open-enrollment, or program-participation opportunities rather than CxA service procurements.
+
+Rachael Straub receives NYSERDA PONs through direct NYSERDA email notifications and monitors those separately. The RFP monitor is therefore focused on NYSERDA procurement-style opportunities rather than duplicating the PON email stream.
+
+The old direct NYSERDA entry is not part of the current direct-source inventory. If duplicate rows from that old source appear on the dashboard, they are likely stale records in `public.opportunity_active` and can be removed from Supabase without touching `opportunity_seen`.
 
 Known limitation: NYSERDA items currently link back to the current funding opportunities landing page rather than individual detail pages.
 
@@ -1034,6 +1325,14 @@ The NYSCR parser reads public listing text blocks and extracts listing fields. D
 ### CT DEEP RFP Search
 
 The CT DEEP parser filters search results toward energy/RFP-related pages and removes common non-procurement noise. Due dates may not always be available in search-result metadata.
+
+### Maine Municipal Association
+
+The Maine Municipal Association parser prioritizes explicit proposal, bid, response, or submission deadlines found in the detail page body before falling back to the MMA page-level End Date.
+
+This is important because the MMA End Date can represent the listing expiration date rather than the actual proposal due date.
+
+Example issue fixed: `RFP - Assessment of Heating and Electrical Systems - Gouldsboro`. The page-level MMA End Date was July 30, 2026, but the actual proposal due date had already passed. The parser now avoids keeping that stale opportunity active.
 
 ### Municipal / Vermont / Maine Sources
 
@@ -1105,7 +1404,7 @@ Mark a source as JavaScript-rendered and skip it until Phase 2:
 1. Open the relevant monitor dashboard.
 2. Expand the manual-review section.
 3. Click the X button on the item.
-4. Enter the dashboard removal token.
+4. Enter the dashboard removal/edit token.
 5. Confirm the row disappears.
 6. Confirm a row was added to `manual_review_suppressed`.
 
@@ -1129,6 +1428,20 @@ where monitor_type = 'emv'
   and unique_key = 'PASTE_UNIQUE_KEY_HERE';
 ```
 
+### Remove a test manual-promotion record
+
+Use this after an end-to-end test of the review/promotion workflow:
+
+```sql
+delete from public.opportunity_review_status
+where title ilike '%PASTE TEST TITLE HERE%';
+
+delete from public.opportunity_active
+where
+  title ilike '%PASTE TEST TITLE HERE%'
+  or opportunity ->> 'title' ilike '%PASTE TEST TITLE HERE%';
+```
+
 ---
 
 ## Deployment Checklist
@@ -1147,51 +1460,126 @@ git status
 python -m py_compile source_health.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
 ```
 
-3. Run both full dry runs:
+3. Run both full dry runs when scraper/scoring behavior changed:
 
 ```powershell
 python main.py --mode broad --monitor-type emv --sources all --dry-run
 python main.py --mode broad --monitor-type commissioning --sources all --dry-run
 ```
 
-4. Restore generated dashboard files if a local live run regenerated them unintentionally:
+4. Regenerate dashboards when dashboard HTML/JavaScript changed:
+
+```powershell
+python main.py --mode broad --monitor-type emv --sources all
+python main.py --mode broad --monitor-type commissioning --sources all
+```
+
+5. Validate generated dashboards when dashboard logic changed:
+
+```powershell
+@'
+from pathlib import Path
+
+files = [Path("docs/emv.html"), Path("docs/commissioning.html")]
+
+for p in files:
+    s = p.read_text(encoding="utf-8-sig")
+
+    print(f"\nChecking {p}...")
+
+    checks = {
+        "has Low/manual promotion comment": "Manual candidates may display confidence as Low" in s,
+        "does not have old Below-threshold-only gate": "toLowerCase() !== 'below threshold'" not in s,
+        "has manual promotion function": "function rowQualifiesForManualPromotion" in s,
+        "has duplicate guard": "Keep the already-promoted main-table row" in s,
+        "has manual promoted data attr": "data-manual-promoted" in s,
+        "has matched keywords data attr": "data-matched-keywords" in s,
+        "has opportunity review endpoint": "functions.supabase.co/opportunity-review" in s,
+        "has suppression endpoint": "functions.supabase.co/suppress-manual-review" in s,
+    }
+
+    failed = False
+    for name, ok in checks.items():
+        print(f"{'OK  ' if ok else 'FAIL'} {name}")
+        failed = failed or not ok
+
+    if failed:
+        raise SystemExit(f"{p} failed generated-dashboard validation.")
+
+print("\nGenerated dashboard validation passed.")
+'@ | python
+```
+
+6. Restore generated dashboard files if a local live run regenerated them unintentionally:
 
 ```powershell
 git restore docs/index.html docs/emv.html docs/commissioning.html
 ```
 
-5. Confirm GitHub Actions secrets exist:
+7. Confirm GitHub Actions secrets exist:
 
 ```text
 SAM_API_KEY
 SENDGRID_API_KEY
 SUPABASE_URL
 SUPABASE_KEY
+GOOGLE_CSE_KEY
+GOOGLE_CSE_ID
 ```
 
-6. Confirm Supabase tables exist:
+8. Confirm Supabase tables exist:
 
 ```text
 opportunity_seen
 opportunity_active
 manual_review_suppressed
+opportunity_review_status
 ```
 
-7. Confirm the Supabase Edge Function still exists and has the required secrets.
+9. Confirm Supabase Edge Function secrets exist:
 
-8. Merge to `main`.
+```text
+RFP_ADMIN_TOKEN
+RFP_SUPABASE_URL
+RFP_SUPABASE_SERVICE_ROLE_KEY
+```
 
-9. Confirm the workflow runs successfully from `main`.
+10. Deploy changed Edge Functions before relying on live dashboard writes:
 
-10. After the next scheduled Monday/Thursday run, check:
-    - both monitor runs executed;
+```powershell
+supabase functions deploy opportunity-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
+supabase functions deploy suppress-manual-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
+```
+
+11. For review/promotion changes, perform one end-to-end test:
+
+   - open the regenerated local dashboard;
+   - choose a disposable manual-review row;
+   - fill Review Status, Reviewer Fit, one owner, one review checkbox, and notes;
+   - save the row;
+   - confirm the row appears in `opportunity_active` with `promoted_from_manual_review = true`;
+   - delete the test review row and active-cache row before production rollout.
+
+12. Commit intentional files only. Do not commit local Supabase temp files.
+
+13. Merge to `main`.
+
+14. Run the workflow from `main` if the dashboard should be deployed immediately rather than waiting for the next scheduled run.
+
+15. Confirm the workflow runs successfully from `main`.
+
+16. After the production run, check:
+    - both monitor runs executed if this was a scheduled run;
+    - the selected monitor ran if this was a manual workflow dispatch;
     - EM&V dashboard timestamp updated;
     - commissioning dashboard timestamp updated;
     - landing page links work;
     - opportunity digest email behavior is as expected;
-    - source-health emails were sent for both monitors;
+    - source-health emails were sent when email delivery was enabled;
     - Supabase active cache updated by monitor type;
     - `opportunity_seen` rows are scoped correctly by monitor type;
+    - review fields load and save;
+    - manual-review promotion works;
     - manual-review X buttons still work.
 
 ---
@@ -1240,6 +1628,8 @@ The landing page is regenerated whenever `generate_dashboard()` runs for either 
 
 On scheduled production runs, both monitor dashboards should be regenerated because the workflow runs both monitor types sequentially.
 
+On manual workflow runs, only the selected monitor runs.
+
 ### Dashboard does not show an expected RFP
 
 Check:
@@ -1250,6 +1640,7 @@ Check:
 4. Is it suppressed in `manual_review_suppressed`?
 5. Is it cached in `opportunity_active`?
 6. Is `visible_until` still today or later?
+7. Was it manually reviewed but not promoted because one of the promotion requirements is incomplete?
 
 Query:
 
@@ -1273,6 +1664,85 @@ Check the `visible_until` date in `opportunity_active`.
 
 If it has a deadline, it is expected to remain visible through the deadline. If it has no deadline, it is expected to remain visible for 30 days from `first_seen`.
 
+### Review fields do not load
+
+Check that the generated dashboard points to the `opportunity-review` endpoint and that the Edge Function is deployed.
+
+The dashboard should contain:
+
+```text
+https://udxcbyoohgzdkjxytxzg.functions.supabase.co/opportunity-review
+```
+
+Also confirm the review table exists:
+
+```sql
+select count(*) from public.opportunity_review_status;
+```
+
+### Review save returns Unauthorized
+
+The entered token does not match the Supabase Edge Function secret:
+
+```text
+RFP_ADMIN_TOKEN
+```
+
+Clear browser localStorage or re-enter the correct token.
+
+### Review save works but manual row does not promote
+
+Check the promotion requirements:
+
+1. Reviewer Fit must be filled and cannot be `Poor Fit`.
+2. Review Status must be filled.
+3. Technical Review Notes or Admin Review Notes must be filled.
+4. At least one reviewed checkbox must be checked.
+5. Tech Owner or Admin Owner must be filled.
+
+A saved row with `Reviewer Fit = Poor Fit` is expected not to promote.
+
+### Manual row promotes in browser but is not in `opportunity_active`
+
+This usually means the browser applied the promotion based on a saved review record, but the Edge Function did not write the active-cache promotion.
+
+Check:
+
+```sql
+select
+  review_key,
+  title,
+  review_status,
+  reviewer_fit,
+  tech_owner,
+  admin_owner,
+  emv_technical_reviewed,
+  commissioning_technical_reviewed,
+  admin_reviewed,
+  updated_at
+from public.opportunity_review_status
+where title ilike '%PASTE PART OF TITLE HERE%';
+```
+
+Then check:
+
+```sql
+select
+  monitor_type,
+  unique_key,
+  source,
+  title,
+  opportunity ->> 'promoted_from_manual_review' as promoted_from_manual_review,
+  opportunity ->> 'promotion_label' as promotion_label,
+  last_seen
+from public.opportunity_active
+where
+  title ilike '%PASTE PART OF TITLE HERE%'
+  or opportunity ->> 'title' ilike '%PASTE PART OF TITLE HERE%';
+```
+
+If the review row exists but the active row does not, refresh the dashboard after confirming the latest `opportunity-review` function is deployed, then save the row again.
+
 ### X button returns Unauthorized
 
 The entered token does not match the Supabase Edge Function secret:
@@ -1283,7 +1753,7 @@ RFP_ADMIN_TOKEN
 
 Clear browser localStorage or re-enter the correct token.
 
-### X button returns Invalid API key
+### X button returns Invalid API key or Supabase upsert failed
 
 The Supabase Edge Function secret is wrong or stale:
 
@@ -1301,7 +1771,8 @@ Check:
 - `opportunity_seen` exists;
 - `save_seen_set()` succeeded after the prior run;
 - `force_all` was not set to `true`;
-- the source did not change notice IDs/URLs for the same posting.
+- the source did not change notice IDs/URLs for the same posting;
+- the duplicate is not a stale row in `opportunity_active` from an old source name or old unique key.
 
 ### Too many false positives
 
@@ -1358,52 +1829,8 @@ Options:
 - Manual live local runs can send emails and update Supabase if credentials are set.
 - The dashboard is static HTML and does not require a server.
 - The active dashboard cache is managed by the Python workflow and Supabase.
-- The manual-review X button uses a Supabase Edge Function; secrets are not embedded in static HTML.
+- Review fields and manual promotion use the `opportunity-review` Supabase Edge Function.
+- The manual-review X button uses the `suppress-manual-review` Supabase Edge Function.
+- Secrets are not embedded in static HTML.
 - Source-health email is currently operational but not persistent.
-- The scheduled production workflow must be merged to `main` to affect Monday's scheduled run.
-
-## Dashboard Review Fields and Supabase Review Layer
-
-The EM&V and Commissioning dashboards include live team-review fields so reviewers can coordinate directly from the static GitHub Pages dashboard.
-
-Review fields include Review Status, Reviewer Fit, Tech Owner, Admin Owner, Admin Reviewed, EM&V Technical Reviewed, Commissioning Technical Reviewed, Technical Review Notes, and Admin Review Notes.
-
-The dashboards remain static HTML files, but review-field values are loaded from and saved to Supabase through the opportunity-review Edge Function.
-
-Review records are stored in public.opportunity_review_status.
-
-The review table uses a shared review_key so the same opportunity can carry the same review data across the EM&V and Commissioning dashboards when the source and notice ID match.
-
-The dashboard can load review data without a token. Saving review data requires the dashboard edit token, passed to the Edge Function as x-rfp-admin-token. The dashboard stores the token in browser local storage after the first successful edit so users do not need to re-enter it for every field update.
-
-Deploy the opportunity-review Edge Function without Supabase JWT verification because the dashboard is hosted as public static HTML on GitHub Pages:
-
-    supabase functions deploy opportunity-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
-
-Required Supabase Edge Function secrets:
-
-    RFP_SUPABASE_URL
-    RFP_SUPABASE_SERVICE_ROLE_KEY
-    RFP_ADMIN_TOKEN
-
-The review table SQL is stored at supabase/sql/001_opportunity_review_status.sql and should be run in the Supabase SQL Editor before deploying the review function.
-
-## Source Maintenance Notes
-
-### NYSERDA
-
-NYSERDA is actively covered through the dedicated API-backed nyserda_current_funding parser.
-
-The NYSERDA API includes broad funding/program opportunities in addition to procurement-style RFPs/RFQs/RFIs/RFQLs. Program Opportunity Notices (PONs) are intentionally excluded from the monitor because they are generally funding, incentive, training, loan, open-enrollment, or program-participation opportunities rather than CxA service procurements.
-
-Rachael Straub receives NYSERDA PONs through direct NYSERDA email notifications and monitors those separately. The RFP monitor is therefore focused on NYSERDA procurement-style opportunities rather than duplicating the PON email stream.
-
-The old direct NYSERDA entry named NYSERDA Funding (direct) is disabled to avoid duplicate dashboard rows. If duplicate rows from that old source appear on the dashboard, they are likely stale records in public.opportunity_active and can be removed from Supabase without touching opportunity_seen.
-
-### Maine Municipal Association
-
-The Maine Municipal Association parser prioritizes explicit proposal, bid, response, or submission deadlines found in the detail page body before falling back to the MMA page-level End Date.
-
-This is important because the MMA End Date can represent the listing expiration date rather than the actual proposal due date.
-
-Example issue fixed: RFP - Assessment of Heating and Electrical Systems - Gouldsboro. The page-level MMA End Date was July 30, 2026, but the actual proposal due date had already passed. The parser now avoids keeping that stale opportunity active.
+- The scheduled production workflow must run from `main` for GitHub Pages deployment.
