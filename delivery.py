@@ -587,6 +587,17 @@ def _render_dashboard_html(
         )
         notice_id = getattr(opp, "notice_id", "") or ""
         review_key = _review_key_for(opp)
+        manual_review_attr = "true" if allow_remove else "false"
+        is_manual_promoted = bool(
+            getattr(opp, "promoted_from_manual_review", False)
+            or getattr(opp, "manual_promoted", False)
+        )
+        manual_promoted_attr = "true" if is_manual_promoted else "false"
+        promoted_badge = (
+            '<span class="badge-promoted">Promoted from Manual Review</span> '
+            if is_manual_promoted
+            else ""
+        )
         review_cell = (
             '<td class="review-cell">'
             '<div class="review-controls">'
@@ -626,6 +637,7 @@ def _render_dashboard_html(
         )
 
         kw_str = ", ".join(opp.matched_keywords[:4]) if opp.matched_keywords else ""
+        matched_keywords_data = "|".join(str(k) for k in (opp.matched_keywords or []))
         title_display = _esc(opp.title[:85]) + ("..." if len(opp.title) > 85 else "")
 
         remove_cell = ""
@@ -646,10 +658,16 @@ def _render_dashboard_html(
             f'data-title-full="{_esc(opp.title)}" '
             f'data-unique-key="{_esc(opp.unique_key())}" '
             f'data-review-key="{_esc(review_key)}" '
+            f'data-manual-review="{manual_review_attr}" '
+            f'data-manual-promoted="{manual_promoted_attr}" '
             f'data-notice-id="{_esc(notice_id)}" '
             f'data-url="{_esc(opp.url)}" '
-            f'class="{"row-new" if is_new else ""}">'
-            f"<td>{new_badge}"
+            f'data-deadline="{_esc(opp.deadline or "")}" '
+            f'data-score="{opp.relevance_score}" '
+            f'data-matched-keywords="{_esc(matched_keywords_data)}" '
+            f'data-issuer="{_esc(opp.issuer)}" '
+            f'class="{"row-new" if is_new else ""}{" promoted-manual" if is_manual_promoted else ""}">'
+            f"<td>{new_badge}{promoted_badge}"
             f'<a href="{_esc(opp.url)}" target="_blank">{title_display}</a></td>'
             f"<td>{_esc(opp.source)}</td>"
             f"<td>{_esc(opp.issuer[:40])}</td>"
@@ -673,7 +691,7 @@ def _render_dashboard_html(
 
     if not manual_rows:
         manual_rows = (
-            '<tr><td colspan="10" style="color:#777;font-style:italic;">'
+            '<tr class="manual-empty"><td colspan="11" style="color:#777;font-style:italic;">'
             'No below-threshold candidates for manual review.'
             '</td></tr>'
         )
@@ -735,6 +753,10 @@ def _render_dashboard_html(
     .row-new td{{background:#f0fff4;}}
     .badge-new{{background:#2e7d32;color:#fff;font-size:10px;font-weight:700;
                 padding:1px 5px;border-radius:3px;}}
+    .badge-promoted{{background:#6a1b9a;color:#fff;font-size:10px;font-weight:700;
+                    padding:1px 5px;border-radius:3px;white-space:nowrap;}}
+    .promoted-manual td{{background:#fff8e1;}}
+    #tbody .remove-cell{{display:none;}}
     .conf-high{{color:#2e7d32;font-weight:700;}}
     .conf-med{{color:#e65100;font-weight:600;}}
     .conf-low{{color:#888;}}
@@ -797,7 +819,7 @@ def _render_dashboard_html(
       <div class="l">High confidence</div></div>
     <div class="stat"><div class="n" style="color:#e65100">{medium_cnt}</div>
       <div class="l">Medium confidence</div></div>
-    <div class="stat"><div class="n">{total_cnt}</div><div class="l">Total active</div></div>
+    <div class="stat"><div class="n" id="total-count">{total_cnt}</div><div class="l">Total active</div></div>
     <div class="stat"><div class="n" id="manual-count">{manual_cnt}</div><div class="l">Manual review</div></div>
   </div>
 
@@ -808,6 +830,7 @@ def _render_dashboard_html(
       <option value="High">High</option>
       <option value="Medium">Medium</option>
       <option value="Low">Low</option>
+      <option value="Below threshold">Below threshold</option>
     </select>
     <select id="f-src" onchange="applyFilters()">
       <option value="">All sources</option>
@@ -939,6 +962,168 @@ def _render_dashboard_html(
       if (msg && record.updated_at) {{
         msg.textContent = 'Saved ' + String(record.updated_at).slice(0, 10);
       }}
+
+      applyManualPromotionState(row);
+    }}
+
+    function hasReviewText(value) {{
+      return String(value || '').trim().length > 0;
+    }}
+
+    function rowQualifiesForManualPromotion(row) {{
+      if (!row) return false;
+
+      const isManualCandidate =
+        row.dataset.manualReview === 'true' || row.dataset.manualPromoted === 'true';
+      if (!isManualCandidate) return false;
+
+      // Manual-review section membership is the source of truth here.
+      // Manual candidates may display confidence as Low, Below threshold, etc.
+      const reviewerFit = getReviewField(row, '.reviewer-fit');
+      if (!hasReviewText(reviewerFit)) return false;
+      if (reviewerFit.trim().toLowerCase() === 'poor fit') return false;
+
+      if (!hasReviewText(getReviewField(row, '.review-status'))) return false;
+
+      const hasNotes =
+        hasReviewText(getReviewField(row, '.technical-review-notes')) ||
+        hasReviewText(getReviewField(row, '.admin-review-notes'));
+      if (!hasNotes) return false;
+
+      const hasReviewedCheckbox =
+        getReviewField(row, '.admin-reviewed') ||
+        getReviewField(row, '.emv-technical-reviewed') ||
+        getReviewField(row, '.commissioning-technical-reviewed');
+      if (!hasReviewedCheckbox) return false;
+
+      const hasOwner =
+        hasReviewText(getReviewField(row, '.review-tech-owner')) ||
+        hasReviewText(getReviewField(row, '.review-admin-owner'));
+      if (!hasOwner) return false;
+
+      return true;
+    }}
+
+    function addPromotionBadge(row) {{
+      const titleCell = row ? row.querySelector('td') : null;
+      if (!titleCell || row.querySelector('.badge-promoted')) return;
+      titleCell.insertAdjacentHTML(
+        'afterbegin',
+        '<span class="badge-promoted">Promoted from Manual Review</span> '
+      );
+    }}
+
+    function removePromotionBadge(row) {{
+      if (!row) return;
+      const badge = row.querySelector('.badge-promoted');
+      if (badge) badge.remove();
+    }}
+
+    function updateManualReviewCounts() {{
+      const manualBody = document.getElementById('manual-review-body');
+      const mainBody = document.getElementById('tbody');
+
+      if (manualBody) {{
+        manualBody.querySelectorAll('tr.manual-empty').forEach(row => row.remove());
+      }}
+
+      const manualRows = manualBody
+        ? manualBody.querySelectorAll('tr[data-unique-key]')
+        : [];
+      const mainRows = mainBody
+        ? mainBody.querySelectorAll('tr[data-unique-key]')
+        : [];
+
+      const manualCount = document.getElementById('manual-count');
+      const manualSummaryCount = document.getElementById('manual-summary-count');
+      const totalCount = document.getElementById('total-count');
+
+      if (manualCount) manualCount.textContent = manualRows.length;
+      if (manualSummaryCount) manualSummaryCount.textContent = manualRows.length;
+      if (totalCount) totalCount.textContent = mainRows.length;
+
+      if (manualBody && manualRows.length === 0) {{
+        manualBody.innerHTML =
+          '<tr class="manual-empty"><td colspan="11" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+      }}
+    }}
+
+    function matchingReviewRows(container, row) {{
+      if (!container || !row) return [];
+      const key = row.dataset.reviewKey || '';
+      const uniqueKey = row.dataset.uniqueKey || '';
+      return Array.from(container.querySelectorAll('tr[data-review-key]')).filter(other => {{
+        if (other === row) return false;
+        if (key && other.dataset.reviewKey === key) return true;
+        if (uniqueKey && other.dataset.uniqueKey === uniqueKey) return true;
+        return false;
+      }});
+    }}
+
+    function ensureManualRemoveCell(row) {{
+      if (!row || row.querySelector('.remove-cell')) return;
+      row.insertAdjacentHTML(
+        'beforeend',
+        '<td class="remove-cell"><button type="button" class="remove-btn" title="Hide this manual-review item" onclick="suppressManualReview(this)">x</button></td>'
+      );
+    }}
+
+    function removeManualRemoveCell(row) {{
+      const cell = row ? row.querySelector('.remove-cell') : null;
+      if (cell) cell.remove();
+    }}
+
+    function applyManualPromotionState(row) {{
+      if (!row) return;
+
+      const mainBody = document.getElementById('tbody');
+      const manualBody = document.getElementById('manual-review-body');
+      const isManualCandidate =
+        row.dataset.manualReview === 'true' || row.dataset.manualPromoted === 'true';
+      const qualifies = rowQualifiesForManualPromotion(row);
+
+      if (qualifies) {{
+        row.dataset.manualReview = row.dataset.manualReview || 'true';
+        row.dataset.manualPromoted = 'true';
+        row.classList.add('promoted-manual');
+        addPromotionBadge(row);
+        removeManualRemoveCell(row);
+
+        // Prevent duplicates when a persisted promoted row is already in the main table
+        // and the same scraped item also appears in manual review after regeneration.
+        const existingMain = matchingReviewRows(mainBody, row).find(other =>
+          other.dataset.manualPromoted === 'true' || other.classList.contains('promoted-manual')
+        );
+
+        if (existingMain) {{
+          // Keep the already-promoted main-table row and do not reinsert a detached/manual duplicate.
+          if (row.parentElement) {{
+            row.remove();
+          }}
+          updateManualReviewCounts();
+          applyFilters();
+          return;
+        }} else if (mainBody && row.parentElement !== mainBody) {{
+          mainBody.prepend(row);
+        }}
+
+        // Remove any remaining duplicate manual rows for the same opportunity.
+        matchingReviewRows(manualBody, row).forEach(other => other.remove());
+      }} else if (isManualCandidate) {{
+        row.dataset.manualReview = 'true';
+        row.dataset.manualPromoted = 'false';
+        row.classList.remove('promoted-manual');
+        removePromotionBadge(row);
+        ensureManualRemoveCell(row);
+
+        if (manualBody && row.parentElement !== manualBody) {{
+          manualBody.querySelectorAll('tr.manual-empty').forEach(empty => empty.remove());
+          manualBody.prepend(row);
+        }}
+      }}
+
+      updateManualReviewCounts();
+      applyFilters();
     }}
 
     async function loadReviewStatuses() {{
@@ -990,6 +1175,17 @@ def _render_dashboard_html(
         notice_id: row.dataset.noticeId || '',
         title: row.dataset.titleFull || row.dataset.title || '',
         url: row.dataset.url || '',
+
+        monitor_type: '{monitor_type}',
+        unique_key: row.dataset.uniqueKey || '',
+        confidence: row.dataset.conf || '',
+        state: row.dataset.state || '',
+        deadline: row.dataset.deadline || '',
+        issuer: row.dataset.issuer || row.dataset.source || '',
+        relevance_score: row.dataset.score || '0',
+        matched_keywords: row.dataset.matchedKeywords || '',
+        manual_review: row.dataset.manualReview === 'true' || row.dataset.manualPromoted === 'true',
+        manual_promoted: rowQualifiesForManualPromotion(row),
 
         review_status: getReviewField(row, '.review-status'),
         reviewer_fit: getReviewField(row, '.reviewer-fit'),

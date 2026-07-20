@@ -23,19 +23,173 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function cleanString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function cleanBoolean(value: unknown): boolean {
+  if (value === true) return true;
+  if (value === false) return false;
+  const text = cleanString(value).toLowerCase();
+  return text === "true" || text === "1" || text === "yes" || text === "on";
+}
+
 function isAuthorized(req: Request) {
   const token = req.headers.get("x-rfp-admin-token") ?? "";
   return Boolean(ADMIN_TOKEN) && token === ADMIN_TOKEN;
 }
 
-function cleanString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length ? trimmed : null;
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function cleanBoolean(value: unknown): boolean {
-  return value === true;
+function addDaysIso(startDate: string, days: number): string {
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+    ? new Date(`${startDate}T00:00:00Z`)
+    : new Date();
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function visibleUntilForPromotion(deadline: string, firstSeen: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return deadline;
+  return addDaysIso(firstSeen, 30);
+}
+
+function parseKeywords(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(cleanString).filter(Boolean);
+  }
+
+  const text = cleanString(value);
+  if (!text) return [];
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.map(cleanString).filter(Boolean);
+    }
+  } catch {
+    // Fall through to pipe/comma splitting.
+  }
+
+  return text
+    .split("|")
+    .flatMap((part) => part.split(","))
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function promotionEligible(row: Record<string, unknown>, payload: Record<string, unknown>): boolean {
+  const isManualReviewCandidate =
+    cleanBoolean(payload.manual_review) || cleanBoolean(payload.manual_promoted);
+
+  const fit = cleanString(row.reviewer_fit);
+  const fitLower = fit.toLowerCase();
+
+  const hasGoodFit = Boolean(fit) && fitLower !== "poor fit";
+  const hasStatus = Boolean(cleanString(row.review_status));
+  const hasNotes = Boolean(cleanString(row.technical_review_notes) || cleanString(row.admin_review_notes));
+  const hasOwner = Boolean(cleanString(row.tech_owner) || cleanString(row.admin_owner));
+  const hasReviewCheck =
+    cleanBoolean(row.admin_reviewed) ||
+    cleanBoolean(row.emv_technical_reviewed) ||
+    cleanBoolean(row.commissioning_technical_reviewed);
+
+  return isManualReviewCandidate && hasGoodFit && hasStatus && hasNotes && hasOwner && hasReviewCheck;
+}
+
+async function upsertManualPromotion(
+  row: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  reviewKey: string,
+) {
+  const monitorType = cleanString(payload.monitor_type) || "emv";
+  const uniqueKey = cleanString(payload.unique_key) || reviewKey;
+  const today = todayIsoDate();
+
+  const existing = await supabase
+    .from("opportunity_active")
+    .select("first_seen")
+    .eq("monitor_type", monitorType)
+    .eq("unique_key", uniqueKey)
+    .maybeSingle();
+
+  if (existing.error) {
+    return { error: existing.error };
+  }
+
+  const firstSeen = cleanString(existing.data?.first_seen) || today;
+  const deadline = cleanString(payload.deadline);
+  const visibleUntil = visibleUntilForPromotion(deadline, firstSeen);
+  const relevanceScore = Number.parseInt(cleanString(payload.relevance_score) || "0", 10) || 0;
+
+  const opportunity = {
+    source: cleanString(row.source),
+    notice_id: cleanString(row.notice_id),
+    url: cleanString(row.url),
+    title: cleanString(row.title),
+    description: cleanString(payload.description),
+    issuer: cleanString(payload.issuer) || cleanString(row.source) || "Unknown",
+    posted_date: null,
+    deadline: deadline || null,
+    state: cleanString(payload.state),
+    naics_code: null,
+    set_aside: null,
+    contact_name: null,
+    contact_email: null,
+    contact_phone: null,
+    relevance_score: relevanceScore,
+    matched_keywords: parseKeywords(payload.matched_keywords),
+    confidence: cleanString(payload.confidence) || "Below threshold",
+    promoted_from_manual_review: true,
+    promotion_label: "Promoted from Manual Review",
+    found_at: `${firstSeen}T00:00:00`,
+    unique_key: uniqueKey,
+  };
+
+  const activeRow = {
+    monitor_type: monitorType,
+    unique_key: uniqueKey,
+    first_seen: firstSeen,
+    last_seen: today,
+    visible_until: visibleUntil,
+    source: cleanString(row.source),
+    title: cleanString(row.title).slice(0, 500),
+    deadline: deadline || null,
+    opportunity,
+  };
+
+  const result = await supabase
+    .from("opportunity_active")
+    .upsert(activeRow, { onConflict: "monitor_type,unique_key" });
+
+  return { error: result.error };
+}
+
+async function removeManualPromotion(payload: Record<string, unknown>, reviewKey: string) {
+  const isManualReviewCandidate =
+    cleanBoolean(payload.manual_review) || cleanBoolean(payload.manual_promoted);
+
+  if (!isManualReviewCandidate) {
+    return { error: null };
+  }
+
+  const monitorType = cleanString(payload.monitor_type) || "emv";
+  const uniqueKey = cleanString(payload.unique_key) || reviewKey;
+
+  if (!uniqueKey) {
+    return { error: null };
+  }
+
+  const result = await supabase
+    .from("opportunity_active")
+    .delete()
+    .eq("monitor_type", monitorType)
+    .eq("unique_key", uniqueKey);
+
+  return { error: result.error };
 }
 
 serve(async (req) => {
@@ -51,7 +205,7 @@ serve(async (req) => {
     return jsonResponse({ error: "Server is missing required Supabase review secrets" }, 500);
   }
 
-  let payload: any;
+  let payload: Record<string, unknown>;
   try {
     payload = await req.json();
   } catch {
@@ -125,7 +279,21 @@ serve(async (req) => {
       return jsonResponse({ error: error.message }, 500);
     }
 
-    return jsonResponse({ record: data });
+    const shouldPromote = promotionEligible(row, payload);
+
+    if (shouldPromote) {
+      const promotion = await upsertManualPromotion(row, payload, reviewKey);
+      if (promotion.error) {
+        return jsonResponse({ error: `Review saved, but promotion failed: ${promotion.error.message}` }, 500);
+      }
+    } else {
+      const removal = await removeManualPromotion(payload, reviewKey);
+      if (removal.error) {
+        return jsonResponse({ error: `Review saved, but promotion cleanup failed: ${removal.error.message}` }, 500);
+      }
+    }
+
+    return jsonResponse({ record: data, promotion_active: shouldPromote });
   }
 
   return jsonResponse({ error: "Unsupported action" }, 400);

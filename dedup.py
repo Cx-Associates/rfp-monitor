@@ -346,10 +346,20 @@ def _opportunity_from_active_row(row: dict) -> Opportunity:
         "relevance_score",
         "matched_keywords",
         "confidence",
+        "promoted_from_manual_review",
+        "manual_promoted",
+        "promotion_label",
         "found_at",
     }
 
     kwargs = {k: v for k, v in data.items() if k in allowed}
+
+    # Sync manual-promotion alias fields so old/new cached payloads render consistently.
+    manual_promoted = bool(kwargs.get("promoted_from_manual_review") or kwargs.get("manual_promoted"))
+    kwargs["promoted_from_manual_review"] = manual_promoted
+    kwargs["manual_promoted"] = manual_promoted
+    if manual_promoted and not kwargs.get("promotion_label"):
+        kwargs["promotion_label"] = "Promoted from Manual Review"
 
     kwargs.setdefault("source", row.get("source") or "Unknown")
     kwargs.setdefault("notice_id", row.get("unique_key") or "")

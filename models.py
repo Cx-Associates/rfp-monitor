@@ -55,6 +55,11 @@ class Opportunity:
     relevance_score:  int  = 0
     matched_keywords: list = field(default_factory=list)
     confidence:       str  = "Unknown"
+    promoted_from_manual_review: bool = False
+    promotion_label: Optional[str] = None
+
+    # -- Manual review promotion --
+    manual_promoted: bool = False
 
     # -- Internal --
     found_at: str = field(
@@ -130,6 +135,9 @@ class Opportunity:
             "relevance_score": self.relevance_score,
             "matched_keywords": self.matched_keywords,
             "confidence": self.confidence,
+            "promoted_from_manual_review": self.promoted_from_manual_review or self.manual_promoted,
+            "manual_promoted": self.promoted_from_manual_review or self.manual_promoted,
+            "promotion_label": self.promotion_label,
             "found_at": self.found_at,
             "unique_key": self.unique_key(),
         }
