@@ -1394,6 +1394,10 @@ The review table SQL is stored at supabase/sql/001_opportunity_review_status.sql
 
 NYSERDA is actively covered through the dedicated API-backed nyserda_current_funding parser.
 
+The NYSERDA API includes broad funding/program opportunities in addition to procurement-style RFPs/RFQs/RFIs/RFQLs. Program Opportunity Notices (PONs) are intentionally excluded from the monitor because they are generally funding, incentive, training, loan, open-enrollment, or program-participation opportunities rather than CxA service procurements.
+
+Rachael Straub receives NYSERDA PONs through direct NYSERDA email notifications and monitors those separately. The RFP monitor is therefore focused on NYSERDA procurement-style opportunities rather than duplicating the PON email stream.
+
 The old direct NYSERDA entry named NYSERDA Funding (direct) is disabled to avoid duplicate dashboard rows. If duplicate rows from that old source appear on the dashboard, they are likely stale records in public.opportunity_active and can be removed from Supabase without touching opportunity_seen.
 
 ### Maine Municipal Association

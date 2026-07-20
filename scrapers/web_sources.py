@@ -449,6 +449,69 @@ def _nyserda_first_value(item: dict, keys: list[str]) -> str:
     return ""
 
 
+
+def _nyserda_is_low_fit_program_item(title: str, description: str, solicitation_number: str = "") -> bool:
+    """
+    Return True for NYSERDA funding/program items that are not a good fit for
+    the CxA RFP monitor.
+
+    NYSERDA's API includes broad funding opportunities, program enrollments,
+    workforce/training solicitations, loan programs, incentives, and contractor
+    qualification pools. Those can contain energy-efficiency language and score
+    as Medium even when they are not actual CxA procurement opportunities.
+    """
+    number_l = (solicitation_number or "").strip().lower()
+    blob = f"{title or ''} {description or ''}".lower()
+
+    # Program Opportunity Notices are generally NYSERDA funding/program
+    # opportunities rather than service procurements.
+    if number_l.startswith("pon "):
+        return True
+
+    low_fit_terms = [
+        "training",
+        "workforce",
+        "career pathways",
+        "career pathway",
+        "apprenticeship",
+        "pre-apprenticeship",
+        "upskilling",
+        "on-the-job",
+        "on the job",
+        "journey worker",
+        "curriculum",
+        "credential",
+        "certification",
+        "mentorship",
+        "internship",
+
+        "revolving loan",
+        "loan fund",
+        "loan program",
+        "low interest loan",
+        "financial incentives",
+        "incentives",
+        "grant program",
+        "funding is available",
+        "funding opportunity",
+
+        "open enrollment",
+        "program opportunity notice",
+        "program manual",
+        "participation agreement",
+
+        "contractor network",
+        "qualification process",
+        "equipment and network qualification",
+        "charge ready",
+        "multifamily contractor network",
+        "affordable multifamily program",
+    ]
+
+    return any(term in blob for term in low_fit_terms)
+
+
+
 def _nyserda_normalize_due_date(value: str) -> Optional[str]:
     """
     Normalize NYSERDA due date strings.
@@ -691,6 +754,10 @@ def _scrape_nyserda_current_funding(url: str, name: str, state: str) -> List[Opp
                 description_bits.append(short_description)
 
             description = clean_text(" | ".join(description_bits), max_length=2000)
+
+            if _nyserda_is_low_fit_program_item(title, description, solicitation_number):
+                logger.info(f"NYSERDA current funding parser: skipping low-fit program item: {title}")
+                continue
 
             unique_key = solicitation_number or detail_url or title
             if unique_key in seen_keys:
