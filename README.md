@@ -323,13 +323,13 @@ GitHub -> Actions -> CxA RFP Monitor -> Run workflow
 | Input | Description |
 | --- | --- |
 | `mode` | Keyword mode: `broad` or `medium`. |
-| `monitor_type` | Monitor type: `emv` or `commissioning`. |
+| `monitor_type` | Monitor type: `emv`, `commissioning`, or `both`. `both` runs EM&V first, then commissioning. |
 | `dry_run` | If `true`, runs scrapers/scoring only and skips delivery/state update. |
 | `sources` | Source group to run: `sam`, `utilities`, `states_direct`, `google_cse`, or `all`. |
 | `force_all` | If `true`, skips deduplication and reports all passing opportunities. Use carefully. |
 | `send_email` | If `true`, exposes `SENDGRID_API_KEY` to the run and allows emails. If `false`, opportunity and source-health emails are skipped. |
 
-Manual runs execute only the selected `monitor_type`.
+Manual runs execute the selected `monitor_type`. If `both` is selected, the workflow runs EM&V first and then commissioning from the same workflow run.
 
 Manual runs only send email when `send_email` is set to `true`. This includes the opportunity digest and the source-health email.
 
