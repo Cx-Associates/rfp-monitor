@@ -3102,6 +3102,64 @@ def _trim_mma_detail_text(text: str, title: str) -> str:
     return clean_text(text)
 
 
+
+def _extract_mma_proposal_deadline(text: str) -> Optional[str]:
+    """
+    Extract the actual proposal/bid due date from an MMA detail page body.
+
+    MMA detail pages also expose a generic page-level End Date. That End Date
+    is not always the proposal deadline, so explicit body deadline language
+    takes priority.
+
+    This intentionally accepts loose wording such as:
+      - Proposals Due: April 30, 2026
+      - Proposals must be received by 2:00 PM on April 30, 2026
+      - Bids shall be submitted no later than April 30, 2026
+    """
+    text = clean_text(text or "", max_length=10000)
+    if not text:
+        return None
+
+    date_pattern = (
+        r"(?:[A-Z][a-z]+,\s+)?[A-Z][a-z]+\s+\d{1,2},\s+\d{4}|"
+        r"\d{1,2}/\d{1,2}/\d{2,4}|"
+        r"\d{4}-\d{2}-\d{2}"
+    )
+
+    explicit_patterns = [
+        rf"\bproposals?\s+due\b.{{0,160}}?({date_pattern})",
+        rf"\bbids?\s+due\b.{{0,160}}?({date_pattern})",
+        rf"\bresponses?\s+due\b.{{0,160}}?({date_pattern})",
+        rf"\bsubmissions?\s+due\b.{{0,160}}?({date_pattern})",
+        rf"\bdeadline\s+for\s+(?:proposals?|bids?|responses?|submissions?)\b.{{0,160}}?({date_pattern})",
+        rf"\bproposal\s+deadline\b.{{0,160}}?({date_pattern})",
+        rf"\bbid\s+deadline\b.{{0,160}}?({date_pattern})",
+        rf"\bsubmission\s+deadline\b.{{0,160}}?({date_pattern})",
+    ]
+
+    for pattern_text in explicit_patterns:
+        match = re.search(pattern_text, text, flags=re.IGNORECASE)
+        if match:
+            normalized = normalize_date(match.group(1))
+            if normalized:
+                return normalized
+
+    context_patterns = [
+        rf"\b(?:proposals?|bids?|responses?|submissions?)\b.{{0,100}}?\b(?:received|submitted|sent|delivered)\b.{{0,200}}?({date_pattern})",
+        rf"\b(?:proposals?|bids?|responses?|submissions?)\b.{{0,100}}?\b(?:no\s+later\s+than|not\s+later\s+than|by|until)\b.{{0,200}}?({date_pattern})",
+        rf"\b(?:received|submitted)\b.{{0,100}}?\b(?:no\s+later\s+than|not\s+later\s+than|by|until)\b.{{0,200}}?({date_pattern})",
+    ]
+
+    for pattern_text in context_patterns:
+        match = re.search(pattern_text, text, flags=re.IGNORECASE)
+        if match:
+            normalized = normalize_date(match.group(1))
+            if normalized:
+                return normalized
+
+    return None
+
+
 def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
     Scrape Maine Municipal Association member RFPs, bids, and proposals.
@@ -3195,6 +3253,7 @@ def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) ->
             continue
 
         soup = BeautifulSoup(response.text, "html.parser")
+        page_text = clean_text(soup.get_text(" ", strip=True), max_length=20000)
 
         h1s = [
             clean_text(h.get_text(" ", strip=True))
@@ -3222,8 +3281,7 @@ def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) ->
         if article:
             detail_text = clean_text(article.get_text(" ", strip=True))
         else:
-            full_text = clean_text(soup.get_text(" ", strip=True))
-            detail_text = _trim_mma_detail_text(full_text, title)
+            detail_text = _trim_mma_detail_text(page_text, title)
 
         start_date_raw = _extract_mma_field(detail_text, "Start Date", labels)
         end_date_raw = _extract_mma_field(detail_text, "End Date", labels)
@@ -3234,7 +3292,13 @@ def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) ->
         email_match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", email_raw or "", flags=re.IGNORECASE)
         email = email_match.group(0) if email_match else ""
 
-        deadline = normalize_date(end_date_raw)
+        # Use the full page text first because _trim_mma_detail_text can remove
+        # later schedule sections that contain the actual proposal due date.
+        proposal_deadline = (
+            _extract_mma_proposal_deadline(page_text)
+            or _extract_mma_proposal_deadline(detail_text)
+        )
+        deadline = proposal_deadline or normalize_date(end_date_raw)
         posted_date = normalize_date(start_date_raw)
 
         notice_id = hashlib.md5(detail_url.encode("utf-8")).hexdigest()[:12]
@@ -3246,6 +3310,7 @@ def _scrape_maine_municipal_association_rfps(url: str, name: str, state: str) ->
             f"Type: {type_raw}" if type_raw else "",
             f"Start Date: {start_date_raw}" if start_date_raw else "",
             f"End Date: {end_date_raw}" if end_date_raw else "",
+            f"Proposal deadline: {proposal_deadline}" if proposal_deadline else "",
             detail_text,
         ]
 

@@ -1,4 +1,4 @@
-﻿# CxA RFP Monitor
+# CxA RFP Monitor
 
 Automated scanner for RFP/RFQ/RFI opportunities relevant to Cx Associates. The same codebase currently supports two monitor types:
 
@@ -1361,3 +1361,45 @@ Options:
 - The manual-review X button uses a Supabase Edge Function; secrets are not embedded in static HTML.
 - Source-health email is currently operational but not persistent.
 - The scheduled production workflow must be merged to `main` to affect Monday's scheduled run.
+
+## Dashboard Review Fields and Supabase Review Layer
+
+The EM&V and Commissioning dashboards include live team-review fields so reviewers can coordinate directly from the static GitHub Pages dashboard.
+
+Review fields include Review Status, Reviewer Fit, Tech Owner, Admin Owner, Admin Reviewed, EM&V Technical Reviewed, Commissioning Technical Reviewed, Technical Review Notes, and Admin Review Notes.
+
+The dashboards remain static HTML files, but review-field values are loaded from and saved to Supabase through the opportunity-review Edge Function.
+
+Review records are stored in public.opportunity_review_status.
+
+The review table uses a shared review_key so the same opportunity can carry the same review data across the EM&V and Commissioning dashboards when the source and notice ID match.
+
+The dashboard can load review data without a token. Saving review data requires the dashboard edit token, passed to the Edge Function as x-rfp-admin-token. The dashboard stores the token in browser local storage after the first successful edit so users do not need to re-enter it for every field update.
+
+Deploy the opportunity-review Edge Function without Supabase JWT verification because the dashboard is hosted as public static HTML on GitHub Pages:
+
+    supabase functions deploy opportunity-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
+
+Required Supabase Edge Function secrets:
+
+    RFP_SUPABASE_URL
+    RFP_SUPABASE_SERVICE_ROLE_KEY
+    RFP_ADMIN_TOKEN
+
+The review table SQL is stored at supabase/sql/001_opportunity_review_status.sql and should be run in the Supabase SQL Editor before deploying the review function.
+
+## Source Maintenance Notes
+
+### NYSERDA
+
+NYSERDA is actively covered through the dedicated API-backed nyserda_current_funding parser.
+
+The old direct NYSERDA entry named NYSERDA Funding (direct) is disabled to avoid duplicate dashboard rows. If duplicate rows from that old source appear on the dashboard, they are likely stale records in public.opportunity_active and can be removed from Supabase without touching opportunity_seen.
+
+### Maine Municipal Association
+
+The Maine Municipal Association parser prioritizes explicit proposal, bid, response, or submission deadlines found in the detail page body before falling back to the MMA page-level End Date.
+
+This is important because the MMA End Date can represent the listing expiration date rather than the actual proposal due date.
+
+Example issue fixed: RFP - Assessment of Heating and Electrical Systems - Gouldsboro. The page-level MMA End Date was July 30, 2026, but the actual proposal due date had already passed. The parser now avoids keeping that stale opportunity active.
