@@ -739,9 +739,9 @@ def _scrape_nyserda_current_funding(url: str, name: str, state: str) -> List[Opp
             if solicitation_name:
                 title_parts.append(solicitation_name)
 
+            # Keep the visible dashboard title focused on the solicitation number/name.
+            # SolicitationType is retained in the description as metadata.
             title = " - ".join(title_parts)
-            if solicitation_type and solicitation_type.lower() not in title.lower():
-                title = f"{solicitation_type}: {title}"
 
             description_bits = []
             if section_title:
@@ -3849,6 +3849,24 @@ def _scrape_civicengage_bids(url: str, name: str, state: str) -> List[Opportunit
         raw_title = clean_text(link.get_text(" ", strip=True))
         raw_title = re.sub(r"^read\s+on\s*:?\s*", "", raw_title, flags=re.IGNORECASE).strip()
 
+        # CivicEngage pages include footer/nav links inside the same broad page
+        # markup. Do not allow those labels to become bid titles.
+        if raw_title.lower() in {
+            "contact us",
+            "home",
+            "bid postings",
+            "return to main bid postings page",
+            "notify me",
+            "print",
+            "submit",
+            "share",
+            "facebook",
+            "twitter",
+            "linkedin",
+            "email",
+        }:
+            continue
+
         parent = link
         for _ in range(5):
             if parent.parent:
@@ -3885,6 +3903,8 @@ def _scrape_civicengage_bids(url: str, name: str, state: str) -> List[Opportunit
         bad_detail_titles = {
             "bid postings",
             "bid details",
+            "contact us",
+            "quick links",
             "live edit",
             "notify me",
             "sign in",
@@ -3910,6 +3930,28 @@ def _scrape_civicengage_bids(url: str, name: str, state: str) -> List[Opportunit
 
         if not title:
             title = f"{name} bid {bid_id}"
+
+        # CivicEngage bid-detail pages often include a structured field like:
+        # "Bid Title: Department of Public Works Site Improvements Category: ..."
+        # Prefer that field over headings/sidebar labels such as "Quick Links".
+        bid_title_match = re.search(
+            r"\bBid\s+Title:\s*(.+?)(?:\s+Category:|\s+Status:|\s+Description:|\s+Publication Date/Time:|$)",
+            combined_text,
+            flags=re.IGNORECASE,
+        )
+        if bid_title_match:
+            extracted_title = clean_text(bid_title_match.group(1), max_length=300)
+            if extracted_title and extracted_title.strip().lower() not in bad_detail_titles:
+                title = extracted_title
+
+        # Final safety: if detail-page parsing still produced a navigation/footer
+        # title, fall back to the original listing title when possible; otherwise
+        # skip the item.
+        if title.strip().lower() in bad_detail_titles:
+            if raw_title and raw_title.strip().lower() not in bad_detail_titles:
+                title = raw_title
+            else:
+                continue
 
         deadline = None
         close_match = re.search(

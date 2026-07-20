@@ -751,17 +751,6 @@ DIRECT_SCRAPE_STATES = [
         "notes": "Massachusetts public open-bid search. Uses a dedicated parser for bidDetail.sda links exposed in the COMMBUYS search results HTML.",
     },
     {
-        "name": "NYSERDA Funding (direct)",
-        "state": "NY",
-        "url": "https://www.nyserda.ny.gov/Funding-Opportunities/Current-Funding-Opportunities",
-        "type": "nyserda_current_funding",
-        "active": False,
-        "notes": (
-            "Disabled to avoid duplicate scraping. NYSERDA is actively covered "
-            "in UTILITY_SOURCES using the dedicated nyserda_current_funding parser."
-        ),
-    },
-    {
         "name": "California CaleProcure",
         "state": "CA",
         "url": "https://caleprocure.ca.gov/pages/public-search.aspx",
