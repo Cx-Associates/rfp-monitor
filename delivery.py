@@ -19,6 +19,7 @@ KNOWN FAILURE POINTS (general):
 import json
 import logging
 import os
+import hashlib
 from datetime import datetime
 from typing import List, Optional
 
@@ -548,6 +549,28 @@ def _render_dashboard_html(
     total_cnt  = len(all_opps)
     manual_cnt = len(manual_review)
 
+    def _norm_review_part(value: object) -> str:
+        """Normalize a field for cross-dashboard review-key fallback matching."""
+        return " ".join(str(value or "").strip().lower().split())
+
+    def _review_key_for(opp: Opportunity) -> str:
+        """
+        Shared review key used by both EM&V and commissioning dashboards.
+
+        Preferred: source + notice_id
+        Fallback:  source + normalized title + normalized URL
+        """
+        notice_id = getattr(opp, "notice_id", "") or ""
+        if notice_id:
+            basis = f"{opp.source}|notice|{notice_id.strip().lower()}"
+        else:
+            basis = (
+                f"{opp.source}|fallback|"
+                f"{_norm_review_part(opp.title)}|"
+                f"{_norm_review_part(opp.url)}"
+            )
+        return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
     def table_row(opp: Opportunity, allow_remove: bool = False) -> str:
         """Render one <tr> for an opportunities table."""
         is_new      = opp.unique_key() in new_keys
@@ -562,6 +585,46 @@ def _render_dashboard_html(
             else f"{days}d" if days is not None
             else "--"
         )
+        notice_id = getattr(opp, "notice_id", "") or ""
+        review_key = _review_key_for(opp)
+        review_cell = (
+            '<td class="review-cell">'
+            '<div class="review-controls">'
+            '<label><span class="review-label">Review Status <span class="review-help" title="Human triage decision for next step.">i</span></span>'
+            '<select class="review-status" onchange="saveReviewRow(this)">'
+            '<option value=""></option>'
+            '<option>Needs Further Tech Review</option>'
+            '<option>Needs Further Admin Review</option>'
+            '<option>Needs KO Call</option>'
+            '<option>No-Go</option>'
+            '<option>Already Captured Before</option>'
+            '<option>Duplicate</option>'
+            '</select></label>'
+            '<label><span class="review-label">Reviewer Fit <span class="review-help" title="Human fit rating after reviewing the RFP.">i</span></span>'
+            '<select class="reviewer-fit" onchange="saveReviewRow(this)">'
+            '<option value=""></option>'
+            '<option>Strong Fit</option>'
+            '<option>Possible Fit</option>'
+            '<option>Poor Fit</option>'
+            '<option>Possible Subcontractor Role</option>'
+            '<option>Indicative of potential upcoming RFP</option>'
+            '</select></label>'
+            '<label>Tech Owner <input class="review-tech-owner" type="text" placeholder="Tech reviewer / owner" onblur="saveReviewRow(this)"></label>'
+            '<label>Admin Owner <input class="review-admin-owner" type="text" placeholder="Admin reviewer / owner" onblur="saveReviewRow(this)"></label>'
+            '<div class="review-checks">'
+            '<label><input type="checkbox" class="admin-reviewed" onchange="saveReviewRow(this)"> Admin reviewed</label>'
+            '<label><input type="checkbox" class="emv-technical-reviewed" onchange="saveReviewRow(this)"> EM&amp;V tech reviewed</label>'
+            '<label><input type="checkbox" class="commissioning-technical-reviewed" onchange="saveReviewRow(this)"> Cx tech reviewed</label>'
+            '</div>'
+            '<label class="review-note"><span class="review-label">Technical Review Notes <span class="review-help" title="Technical fit, scope, teaming needs, or go/no-go rationale.">i</span></span>'
+            '<textarea class="technical-review-notes" rows="2" placeholder="Technical notes"></textarea></label>'
+            '<label class="review-note"><span class="review-label">Admin Review Notes <span class="review-help" title="Admin tracking such as F drive, HubSpot, deadline check, or duplicate handling.">i</span></span>'
+            '<textarea class="admin-review-notes" rows="2" placeholder="Admin notes / F drive / HubSpot"></textarea></label>'
+            '<button type="button" class="review-save" onclick="saveReviewRow(this)">Save notes</button>'
+            '<span class="review-msg"></span>'
+            '</div></td>'
+        )
+
         kw_str = ", ".join(opp.matched_keywords[:4]) if opp.matched_keywords else ""
         title_display = _esc(opp.title[:85]) + ("..." if len(opp.title) > 85 else "")
 
@@ -582,6 +645,9 @@ def _render_dashboard_html(
             f'data-title="{_esc(opp.title.lower())}" '
             f'data-title-full="{_esc(opp.title)}" '
             f'data-unique-key="{_esc(opp.unique_key())}" '
+            f'data-review-key="{_esc(review_key)}" '
+            f'data-notice-id="{_esc(notice_id)}" '
+            f'data-url="{_esc(opp.url)}" '
             f'class="{"row-new" if is_new else ""}">'
             f"<td>{new_badge}"
             f'<a href="{_esc(opp.url)}" target="_blank">{title_display}</a></td>'
@@ -592,6 +658,7 @@ def _render_dashboard_html(
             f"<td>{opp.relevance_score}</td>"
             f"<td>{deadline_str}</td>"
             f"<td>{days_html}</td>"
+            f"{review_cell}"
             f'<td style="font-size:11px;color:#666;">{_esc(kw_str)}</td>'
             f"{remove_cell}"
             f"</tr>\n"
@@ -613,6 +680,8 @@ def _render_dashboard_html(
 
     source_options = "".join(f'<option value="{_esc(s)}">{_esc(s)}</option>' for s in sources)
     state_options  = "".join(f'<option value="{_esc(s)}">{s}</option>' for s in states)
+    emv_nav_class = "nav-link active" if monitor_type == "emv" else "nav-link"
+    cx_nav_class = "nav-link active" if monitor_type == "commissioning" else "nav-link"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -627,6 +696,10 @@ def _render_dashboard_html(
     .hdr{{background:#1a1a2e;color:#fff;padding:18px 28px;}}
     .hdr h1{{font-size:22px;font-weight:700;}}
     .hdr p{{font-size:13px;opacity:.7;margin-top:4px;}}
+    .dash-nav{{display:flex;gap:8px;flex-wrap:wrap;padding:12px 28px;background:#fff;border-bottom:1px solid #e3e6ea;}}
+    .nav-link{{display:inline-block;padding:7px 12px;border:1px solid #d7dbe0;border-radius:6px;background:#fff;color:#1a1a2e;font-size:13px;font-weight:600;text-decoration:none;}}
+    .nav-link:hover{{background:#f3f5f8;text-decoration:none;}}
+    .nav-link.active{{background:#1a1a2e;color:#fff;border-color:#1a1a2e;}}
     .mode-badge{{display:inline-block;background:#e65100;color:#fff;font-size:11px;
                  font-weight:700;padding:2px 8px;border-radius:3px;margin-left:10px;
                  vertical-align:middle;}}
@@ -641,11 +714,22 @@ def _render_dashboard_html(
     .filters button{{padding:6px 12px;border:1px solid #ddd;border-radius:5px;
                      background:#fff;cursor:pointer;font-size:13px;}}
     .tbl-wrap{{padding:0 28px 28px;overflow-x:auto;}}
-    table{{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;
-           box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px;}}
-    th{{background:#1a1a2e;color:#fff;padding:9px 11px;text-align:left;font-size:12px;
+    table{{width:max-content;min-width:100%;border-collapse:collapse;background:#fff;border-radius:8px;
+           box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:12px;table-layout:fixed;}}
+    th{{background:#1a1a2e;color:#fff;padding:8px 8px;text-align:left;font-size:11px;
         font-weight:600;white-space:nowrap;}}
-    td{{padding:9px 11px;border-bottom:1px solid #f0f0f0;}}
+    td{{padding:8px 8px;border-bottom:1px solid #f0f0f0;vertical-align:top;}}
+    th:nth-child(1),td:nth-child(1){{width:360px;min-width:360px;}}
+    th:nth-child(2),td:nth-child(2){{width:105px;min-width:105px;}}
+    th:nth-child(3),td:nth-child(3){{width:95px;min-width:95px;}}
+    th:nth-child(4),td:nth-child(4){{width:48px;min-width:48px;}}
+    th:nth-child(5),td:nth-child(5){{width:70px;min-width:70px;}}
+    th:nth-child(6),td:nth-child(6){{width:55px;min-width:55px;}}
+    th:nth-child(7),td:nth-child(7){{width:92px;min-width:92px;}}
+    th:nth-child(8),td:nth-child(8){{width:55px;min-width:55px;}}
+    th:nth-child(9),td:nth-child(9){{width:780px;min-width:780px;}}
+    th:nth-child(10),td:nth-child(10){{width:160px;min-width:160px;}}
+    .manual-table th:nth-child(11),.manual-table td:nth-child(11){{width:38px;min-width:38px;}}
     tr:last-child td{{border-bottom:none;}}
     tr:hover td{{background:#f8f8ff;}}
     .row-new td{{background:#f0fff4;}}
@@ -655,6 +739,25 @@ def _render_dashboard_html(
     .conf-med{{color:#e65100;font-weight:600;}}
     .conf-low{{color:#888;}}
     .days-urgent{{color:#c62828;font-weight:700;}}
+    .review-cell{{width:780px;min-width:780px;vertical-align:top;}}
+    .review-controls{{display:grid;grid-template-columns:.95fr .95fr 1.05fr 1.05fr;gap:7px 10px;font-size:11px;align-items:start;}}
+    .review-controls label{{display:flex;flex-direction:column;gap:2px;color:#444;font-weight:600;min-width:0;}}
+    .review-controls select,.review-controls input,.review-controls textarea{{font-size:11px;border:1px solid #d7dbe0;border-radius:4px;padding:4px;background:#fff;}}
+    .review-controls textarea{{resize:vertical;min-height:38px;font-family:inherit;}}
+    .review-checks{{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:14px;font-size:11px;padding-top:2px;}}
+    .review-checks label{{display:inline-flex;flex-direction:row;align-items:center;gap:4px;font-weight:500;}}
+    .review-label{{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}}
+    .review-help{{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;border-radius:50%;background:#e8edf3;color:#445;font-size:10px;font-weight:700;cursor:help;}}
+    .deadline-help{{margin-left:4px;background:#fff;color:#1a1a2e;vertical-align:middle;}}
+    .review-note{{grid-column:span 2;}}
+    .review-save{{grid-column:1 / 2;border:0;background:#1a1a2e;color:#fff;border-radius:4px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer;}}
+    .review-save:hover{{background:#30304d;}}
+    .review-msg{{align-self:center;color:#666;font-size:10px;}}
+    @media (max-width:1200px){{
+      .review-cell{{width:620px;min-width:620px;}}
+      .review-controls{{grid-template-columns:1fr 1fr;}}
+      .review-note{{grid-column:span 1;}}
+    }}
     .manual-review{{margin:0 28px 28px;background:#fff;border-radius:8px;
                     box-shadow:0 1px 3px rgba(0,0,0,.1);padding:12px 16px;}}
     .manual-review summary{{cursor:pointer;font-weight:700;color:#1a1a2e;}}
@@ -681,6 +784,12 @@ def _render_dashboard_html(
     </h1>
     <p>{monitor_label} Opportunity Dashboard &mdash; Last updated: {run_time}</p>
   </div>
+
+  <nav class="dash-nav" aria-label="Dashboard navigation">
+    <a class="nav-link" href="index.html">Home</a>
+    <a class="{emv_nav_class}" href="emv.html">EM&amp;V Dashboard</a>
+    <a class="{cx_nav_class}" href="commissioning.html">Commissioning / RCx Dashboard</a>
+  </nav>
 
   <div class="stats">
     <div class="stat"><div class="n">{new_cnt}</div><div class="l">New this run</div></div>
@@ -720,8 +829,8 @@ def _render_dashboard_html(
       <thead>
         <tr>
           <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
-          <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
-          <th>Keywords</th>
+          <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th><th>Days</th>
+          <th>Team Review</th><th>Keywords</th>
         </tr>
       </thead>
       <tbody id="tbody">
@@ -742,8 +851,8 @@ def _render_dashboard_html(
         <thead>
           <tr>
             <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
-            <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
-            <th>Keywords</th><th></th>
+            <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th><th>Days</th>
+            <th>Team Review</th><th>Keywords</th><th></th>
           </tr>
         </thead>
         <tbody id="manual-review-body">
@@ -784,6 +893,158 @@ def _render_dashboard_html(
       document.getElementById('f-new').checked = false;
       applyFilters();
     }}
+    const REVIEW_ENDPOINT = 'https://udxcbyoohgzdkjxytxzg.functions.supabase.co/opportunity-review';
+
+    function getReviewToken(promptText) {{
+      let token = localStorage.getItem('rfpAdminToken') || '';
+      if (!token) {{
+        token = prompt(promptText || 'Enter dashboard edit token');
+        if (!token) return '';
+        localStorage.setItem('rfpAdminToken', token);
+      }}
+      return token;
+    }}
+
+    function setReviewField(row, selector, value) {{
+      const el = row.querySelector(selector);
+      if (!el) return;
+      if (el.type === 'checkbox') {{
+        el.checked = value === true;
+      }} else {{
+        el.value = value || '';
+      }}
+    }}
+
+    function getReviewField(row, selector) {{
+      const el = row.querySelector(selector);
+      if (!el) return '';
+      if (el.type === 'checkbox') return !!el.checked;
+      return el.value || '';
+    }}
+
+    function applyReviewRecord(row, record) {{
+      if (!record) return;
+
+      setReviewField(row, '.review-status', record.review_status);
+      setReviewField(row, '.reviewer-fit', record.reviewer_fit);
+      setReviewField(row, '.review-tech-owner', record.tech_owner);
+      setReviewField(row, '.review-admin-owner', record.admin_owner);
+      setReviewField(row, '.admin-reviewed', record.admin_reviewed);
+      setReviewField(row, '.emv-technical-reviewed', record.emv_technical_reviewed);
+      setReviewField(row, '.commissioning-technical-reviewed', record.commissioning_technical_reviewed);
+      setReviewField(row, '.technical-review-notes', record.technical_review_notes);
+      setReviewField(row, '.admin-review-notes', record.admin_review_notes);
+
+      const msg = row.querySelector('.review-msg');
+      if (msg && record.updated_at) {{
+        msg.textContent = 'Saved ' + String(record.updated_at).slice(0, 10);
+      }}
+    }}
+
+    async function loadReviewStatuses() {{
+      const rows = Array.from(document.querySelectorAll('tr[data-review-key]'));
+      const keys = Array.from(new Set(rows.map(row => row.dataset.reviewKey).filter(Boolean)));
+
+      if (!keys.length) return;
+
+      try {{
+        const response = await fetch(REVIEW_ENDPOINT, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ action: 'list', review_keys: keys }})
+        }});
+
+        const result = await response.json().catch(() => ({{}}));
+
+        if (!response.ok) {{
+          console.warn('Could not load review fields:', result.error || response.status);
+          return;
+        }}
+
+        const records = result.records || [];
+        const byKey = new Map(records.map(record => [record.review_key, record]));
+
+        rows.forEach(row => {{
+          const record = byKey.get(row.dataset.reviewKey);
+          if (record) applyReviewRecord(row, record);
+        }});
+      }} catch (err) {{
+        console.warn('Could not load review fields:', err);
+      }}
+    }}
+
+    async function saveReviewRow(control) {{
+      const row = control.closest('tr');
+      if (!row) return;
+
+      const token = getReviewToken('Enter dashboard edit token');
+      if (!token) return;
+
+      const msg = row.querySelector('.review-msg');
+      if (msg) msg.textContent = 'Saving...';
+
+      const payload = {{
+        action: 'save',
+        review_key: row.dataset.reviewKey || '',
+        source: row.dataset.source || '',
+        notice_id: row.dataset.noticeId || '',
+        title: row.dataset.titleFull || row.dataset.title || '',
+        url: row.dataset.url || '',
+
+        review_status: getReviewField(row, '.review-status'),
+        reviewer_fit: getReviewField(row, '.reviewer-fit'),
+        tech_owner: getReviewField(row, '.review-tech-owner'),
+        admin_owner: getReviewField(row, '.review-admin-owner'),
+
+        admin_reviewed: getReviewField(row, '.admin-reviewed'),
+        emv_technical_reviewed: getReviewField(row, '.emv-technical-reviewed'),
+        commissioning_technical_reviewed: getReviewField(row, '.commissioning-technical-reviewed'),
+
+        technical_review_notes: getReviewField(row, '.technical-review-notes'),
+        admin_review_notes: getReviewField(row, '.admin-review-notes'),
+
+        updated_by: getReviewField(row, '.review-tech-owner') || getReviewField(row, '.review-admin-owner') || 'dashboard'
+      }};
+
+      try {{
+        const response = await fetch(REVIEW_ENDPOINT, {{
+          method: 'POST',
+          headers: {{
+            'Content-Type': 'application/json',
+            'x-rfp-admin-token': token
+          }},
+          body: JSON.stringify(payload)
+        }});
+
+        const result = await response.json().catch(() => ({{}}));
+
+        if (!response.ok) {{
+          if (response.status === 401) {{
+            localStorage.removeItem('rfpAdminToken');
+            if (msg) msg.textContent = 'Token rejected';
+            alert('Dashboard edit token was rejected. Try again with the correct token.');
+          }} else {{
+            if (msg) msg.textContent = 'Save failed';
+            alert('Could not save review fields: ' + (result.error || response.status));
+          }}
+          return;
+        }}
+
+        if (result.record) {{
+          document.querySelectorAll('tr[data-review-key]').forEach(otherRow => {{
+            if (otherRow.dataset.reviewKey === result.record.review_key) {{
+              applyReviewRecord(otherRow, result.record);
+            }}
+          }});
+        }}
+
+        if (msg) msg.textContent = 'Saved';
+      }} catch (err) {{
+        if (msg) msg.textContent = 'Save failed';
+        alert('Could not save review fields. Check network connection and try again.');
+      }}
+    }}
+
     async function suppressManualReview(button) {{
       const row = button.closest('tr');
       if (!row) return;
@@ -845,7 +1106,7 @@ def _render_dashboard_html(
 
         if (manualRows.length === 0) {{
           document.getElementById('manual-review-body').innerHTML =
-            '<tr><td colspan="10" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+            '<tr><td colspan="11" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
         }}
       }} catch (err) {{
         alert('Could not hide item. Check network connection and try again.');
@@ -856,6 +1117,7 @@ def _render_dashboard_html(
 
     // Initialize row count on load
     applyFilters();
+    loadReviewStatuses();
   </script>
 </body>
 </html>"""
