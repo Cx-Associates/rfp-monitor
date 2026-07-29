@@ -43,7 +43,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 # ---------------------------------------------------------------------------
@@ -218,6 +218,7 @@ def run_scrapers(source_str: str) -> List:
 def main():
     """Full monitoring cycle. See module docstring for step-by-step."""
     args = parse_args()
+    run_started_at = datetime.now(timezone.utc).isoformat()
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -266,7 +267,24 @@ def main():
         )
         if not args.dry_run:
             from delivery import generate_dashboard
+            from source_health import (
+                get_source_health_records,
+                persist_source_health_records,
+            )
+
             generate_dashboard([], [], mode=mode, monitor_type=monitor_type)
+
+            health_records = get_source_health_records()
+            health_persist_ok = persist_source_health_records(
+                health_records,
+                monitor_type=monitor_type,
+                mode=mode,
+                run_started_at=run_started_at,
+            )
+            logger.info(
+                f"Source health persistence: "
+                f"{'OK' if health_persist_ok else 'FAILED'}"
+            )
         sys.exit(0)
 
     # -------------------------------------------------------------------------
@@ -318,7 +336,12 @@ def main():
         )
         if not args.dry_run:
             from delivery import generate_dashboard, send_source_health_email
-            from source_health import get_source_health_records
+            from source_health import (
+                get_source_health_records,
+                persist_source_health_records,
+            )
+
+            health_records = get_source_health_records()
 
             generate_dashboard(
                 [],
@@ -328,8 +351,19 @@ def main():
                 monitor_type=monitor_type,
             )
             send_source_health_email(
-                get_source_health_records(),
+                health_records,
                 monitor_type=monitor_type,
+            )
+
+            health_persist_ok = persist_source_health_records(
+                health_records,
+                monitor_type=monitor_type,
+                mode=mode,
+                run_started_at=run_started_at,
+            )
+            logger.info(
+                f"Source health persistence: "
+                f"{'OK' if health_persist_ok else 'FAILED'}"
             )
         sys.exit(0)
 
@@ -371,11 +405,16 @@ def main():
     # Step 6: Deliver
     # -------------------------------------------------------------------------
     from delivery import send_email_digest, generate_dashboard, send_source_health_email
-    from source_health import get_source_health_records
+    from source_health import (
+        get_source_health_records,
+        persist_source_health_records,
+    )
+
+    health_records = get_source_health_records()
 
     email_ok    = send_email_digest(new_opps, mode=mode, monitor_type=monitor_type)
     health_email_ok = send_source_health_email(
-        get_source_health_records(),
+        health_records,
         monitor_type=monitor_type,
     )
     dashboard_ok = generate_dashboard(
@@ -386,10 +425,21 @@ def main():
         monitor_type=monitor_type,
     )
 
+    health_persist_ok = persist_source_health_records(
+        health_records,
+        monitor_type=monitor_type,
+        mode=mode,
+        run_started_at=run_started_at,
+    )
+
     logger.info(
         f"Delivery: email={'OK' if email_ok else 'FAILED'} | "
         f"source_health_email={'OK' if health_email_ok else 'FAILED'} | "
         f"dashboard={'OK' if dashboard_ok else 'FAILED'}"
+    )
+    logger.info(
+        f"Source health persistence: "
+        f"{'OK' if health_persist_ok else 'FAILED'}"
     )
 
     # -------------------------------------------------------------------------

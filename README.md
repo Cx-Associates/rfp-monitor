@@ -7,7 +7,7 @@ The same codebase currently supports two monitor types:
 1. **EM&V / Evaluation** (`emv`)
 2. **Commissioning / RCx** (`commissioning`)
 
-The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, state, municipal, and priority procurement sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, and sends separate source-health emails after each non-dry run.
+The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, state, municipal, and priority procurement sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, sends separate source-health emails on applicable non-dry completion paths, and persists source-health history to Supabase.
 
 ---
 
@@ -120,7 +120,7 @@ Manual promotion does not change the automated scoring result. It adds a human-r
 
 ### 3. Source-Health Email
 
-Each non-dry monitor run sends a separate source-health email through SendGrid. This email is intentionally separate from the opportunity digest.
+Non-dry runs that reach the scored delivery paths send a separate source-health email through SendGrid. This email is intentionally separate from the opportunity digest. The all-scrapers-zero path preserves the existing behavior of generating an empty dashboard without sending this email, while still attempting to persist its health records.
 
 The source-health email is sent to:
 
@@ -143,7 +143,7 @@ Examples:
 [CxA RFP Monitor Health] Commissioning / RCx source report - July 10, 2026 (0 errors, 12 warnings)
 ```
 
-Source-health reporting is currently **in-memory and email-only**. It is not yet persisted to Supabase. A future enhancement should persist health results so repeated zero-candidate sources and repeated failures can be trended.
+Source-health records remain in memory during a run for email rendering, and each completed non-dry run attempts to persist them to `source_health_runs` and `source_health_records` in Supabase. Persistence failures are logged but do not block email, dashboard generation, or seen-state saves.
 
 ---
 
@@ -175,11 +175,12 @@ Each monitor run follows this flow:
 11. For non-dry runs, load active cached dashboard opportunities.
 12. Merge current passing opportunities with cached active opportunities.
 13. Deduplicate current passing opportunities against the monitor-specific Supabase seen-set unless `--force-all` is used.
-14. For non-dry runs, send:
+14. For non-dry runs, perform the delivery actions applicable to that completion path:
    - the opportunity digest;
    - the source-health email;
    - the dashboard files.
-15. Save newly delivered opportunities to the Supabase seen-set if at least one main delivery channel succeeds.
+15. Persist the run-level summary and source-level health records to Supabase. This write is nonfatal.
+16. Save newly delivered opportunities to the Supabase seen-set if at least one main delivery channel succeeds.
 
 Important behavior:
 
@@ -249,7 +250,7 @@ rfp-monitor/
 |-- scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
 |-- dedup.py                                     # Supabase deduplication, active cache, suppression filtering, active-cache reload
 |-- delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
-|-- source_health.py                             # In-memory source-health records and health-code summary
+|-- source_health.py                             # Source-health collection, summary, and Supabase persistence
 |-- requirements.txt                             # Python dependencies
 |-- docs/
 |   |-- index.html                               # Landing page output
@@ -267,7 +268,8 @@ rfp-monitor/
 |   |   `-- suppress-manual-review/
 |   |       `-- index.ts                         # Manual-review X-button suppression Edge Function
 |   |-- sql/
-|   |   `-- 001_opportunity_review_status.sql    # Review table setup
+|   |   |-- 001_opportunity_review_status.sql    # Review table setup
+|   |   `-- 002_source_health_persistence.sql    # Source-health history tables
 |   `-- .temp/                                  # Local Supabase CLI temp files; should be ignored by git
 `-- .github/
     `-- workflows/
@@ -559,7 +561,7 @@ The old direct NYSERDA source is not part of the current direct-source inventory
 
 Source-health tracking is implemented in `source_health.py` and used by `main.py`, `scrapers/web_sources.py`, and `delivery.py`.
 
-Health records are stored in memory during a single Python process. At the end of each non-dry run, the records are rendered into a separate HTML email.
+Health records are collected in memory during a single Python process. Each completed non-dry run attempts to persist the same health snapshot to Supabase. Existing source-health email behavior remains separate and uses that same snapshot where the run path sends the email.
 
 Current health codes:
 
@@ -600,7 +602,7 @@ HEALTH_WARN_ZERO
 
 because the underlying fetch returned an empty result rather than raising an exception through the source wrapper.
 
-A future source-health persistence update should distinguish:
+A future source-health classification update should distinguish:
 
 ```text
 true zero candidates
@@ -608,15 +610,11 @@ fetch/page-load failure that returned zero
 parser failure that returned zero
 ```
 
-### Future Source-Health Enhancement
+### Supabase Source-Health Persistence
 
-Planned later enhancement:
+Each completed non-dry run attempts to write one parent row to `source_health_runs` and zero or more detail rows to `source_health_records`. The schema is defined in `supabase/sql/002_source_health_persistence.sql`. Dry runs do not write source-health history. Persistence failures are logged and isolated from delivery and seen-state saves.
 
-- add a Supabase source-health table;
-- persist source name, group, monitor type, health code, candidate count, message, and run timestamp;
-- trend sources that repeatedly return zero candidates;
-- flag normally productive sources that suddenly drop to zero;
-- distinguish fetch failures from true zero-candidate pages.
+Future enhancements can use this history to trend repeated zero-candidate sources, flag normally productive sources that suddenly drop to zero, and distinguish fetch failures from true zero-candidate pages.
 
 ---
 
@@ -628,7 +626,8 @@ The monitor uses Supabase for:
 2. active dashboard persistence;
 3. manual-review suppression;
 4. dashboard review-field storage;
-5. manual-review promotion persistence.
+5. manual-review promotion persistence;
+6. source-health run history.
 
 Current tables:
 
@@ -637,7 +636,11 @@ opportunity_seen
 opportunity_active
 manual_review_suppressed
 opportunity_review_status
+source_health_runs
+source_health_records
 ```
+
+The source-health tables are scoped by `monitor_type`. V1 enables row-level security and grants server-side access to `service_role`; the static dashboards do not read these tables.
 
 All opportunity-state tables are scoped by `monitor_type` where applicable.
 
@@ -1147,7 +1150,7 @@ GitHub repo -> Settings -> Secrets and variables -> Actions
 | --- | --- |
 | `SAM_API_KEY` | SAM.gov federal opportunities API. |
 | `SENDGRID_API_KEY` | SendGrid opportunity digest and source-health email delivery. |
-| `SUPABASE_URL` | Supabase project URL for deduplication, active dashboard cache, and suppression filtering during workflow runs. |
+| `SUPABASE_URL` | Supabase project URL for deduplication, active dashboard cache, suppression filtering, and source-health persistence during workflow runs. |
 | `SUPABASE_KEY` | Supabase service/API key used by the Python Supabase logic. |
 | `GOOGLE_CSE_KEY` | Google Custom Search key; currently unused because Google CSE is disabled in `main.py`. |
 | `GOOGLE_CSE_ID` | Google Custom Search engine ID; currently unused because Google CSE is disabled in `main.py`. |
@@ -1534,6 +1537,8 @@ opportunity_seen
 opportunity_active
 manual_review_suppressed
 opportunity_review_status
+source_health_runs
+source_health_records
 ```
 
 9. Confirm Supabase Edge Function secrets exist:
@@ -1575,7 +1580,8 @@ supabase functions deploy suppress-manual-review --project-ref udxcbyoohgzdkjxyt
     - commissioning dashboard timestamp updated;
     - landing page links work;
     - opportunity digest email behavior is as expected;
-    - source-health emails were sent when email delivery was enabled;
+    - source-health emails were sent when email delivery was enabled and the run reached an email-sending path;
+    - one `source_health_runs` row and the expected `source_health_records` rows were persisted for each completed non-dry monitor run;
     - Supabase active cache updated by monitor type;
     - `opportunity_seen` rows are scoped correctly by monitor type;
     - review fields load and save;
@@ -1804,14 +1810,14 @@ Options:
 
 | Item | Status / Next Step |
 | --- | --- |
-| Source-health persistence | Health records are currently in-memory and email-only. Add Supabase persistence later to trend repeated zero-candidate sources and repeated failures. |
+| Source-health trend UI/alerts | V1 now persists run and detail history to Supabase. Trend visualization and automated repeated-failure alerts are not yet implemented. |
 | Vermont VSIGNS health code | Recent local runs show a DNS/name-resolution warning, but V1 records `HEALTH_WARN_ZERO` because the fetch helper returns an empty result. Future health tracking should distinguish fetch failure from true zero candidates. |
 | NYISO Procurement | Current configured URL has returned 404. Need replacement URL or disable source. |
 | National Grid | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Avangrid / United Illuminating | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Google CSE | Disabled in `main.py`; keep disabled unless an eligible working Google CSE project/API key is available. |
 | Generic scrapers | Can collect old PDFs, informational pages, or broad procurement rows. Dedicated parsers and manual-review suppression help manage noise. |
-| Source drift | Website redesigns may cause sources to return zero candidates without raising exceptions. Source-health email helps identify this, but persistent trend tracking is still future work. |
+| Source drift | Website redesigns may cause sources to return zero candidates without raising exceptions. Source-health history is now persisted, but trend visualization and alerting are still future work. |
 | BED detail pages | Detail pages may be Cloudflare-blocked. Parser uses listing links and may have limited scope/deadline text. |
 | NYSCR detail links | Detail pages may require login. Parser uses public listing fields and stable CR numbers. |
 | CT DEEP metadata | Search-result metadata may not expose due dates. |
@@ -1832,5 +1838,5 @@ Options:
 - Review fields and manual promotion use the `opportunity-review` Supabase Edge Function.
 - The manual-review X button uses the `suppress-manual-review` Supabase Edge Function.
 - Secrets are not embedded in static HTML.
-- Source-health email is currently operational but not persistent.
+- Source-health email remains operational, and completed non-dry runs now attempt to persist source-health history to Supabase.
 - The scheduled production workflow must run from `main` for GitHub Pages deployment.
