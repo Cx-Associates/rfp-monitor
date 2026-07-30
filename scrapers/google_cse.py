@@ -31,7 +31,7 @@ RATE LIMITS:
   - Free tier: 100 queries/day (10 results per query)
   - $5 per 1,000 additional queries if you exceed the free tier
   - We issue one API call per search query string (8 queries by default)
-  - Total: 8 API calls per weekly run -- well within the free tier
+  - Total: 8 API calls per scheduled run -- well within the free tier
 
 KNOWN FAILURE POINTS:
   1. Google CSE only returns pages that Google has indexed. Newly posted
@@ -45,8 +45,8 @@ KNOWN FAILURE POINTS:
      portals block Googlebot. Supplement with direct scraping for the
      most important states (see scrapers/state_portals.py).
   4. CSE free tier pauses if you exceed 100 queries/day. The workflow
-     runs once per week so this should not be an issue, but watch if you
-     add many more queries or run manual tests frequently.
+     runs twice per week, well below that daily limit, but watch usage if
+     you add many more queries or run manual tests frequently.
   5. The CSE "cx" ID is specific to your search engine configuration.
      If you create a new CSE, update the GOOGLE_CSE_ID secret.
 """

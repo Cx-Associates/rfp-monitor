@@ -4189,7 +4189,7 @@ def _scrape_fairfax_vt_bids(url: str, name: str, state: str) -> List[Opportunity
                 continue
 
             # Skip rows without a fixed date. "Open Until Contracted" items can
-            # be stale on this page and are less useful for weekly monitoring.
+            # be stale on this page and are less useful for scheduled monitoring.
             deadline = extract_date(closing_raw)
             if not deadline:
                 continue

@@ -2,7 +2,7 @@
 dedup.py -- Deduplication and State Persistence via Supabase
 =============================================================
 Tracks which opportunities have already been reported so repeated
-weekly runs don't send the same RFP again.
+scheduled runs don't send the same RFP again.
 
 State is stored in the Supabase table `opportunity_seen` which
 you created manually. This avoids needing GitHub write permissions.
@@ -32,7 +32,7 @@ KNOWN FAILURE POINTS:
   3. The supabase-py package must be in requirements.txt. If missing,
      the import will fail and dedup will be skipped entirely.
   4. Supabase free tier has a 500MB database limit. Each row in this
-     table is tiny (< 1KB), so even after years of weekly runs this
+     table is tiny (< 1KB), so even after years of scheduled runs this
      won't be an issue.
 """
 
@@ -112,7 +112,7 @@ def load_seen_set() -> SeenSet:
 
     KNOWN FAILURE POINT: If the table has grown very large (thousands of
     entries), loading it all into memory could be slow. In practice this
-    won't happen -- we expire entries after STATE_EXPIRY_DAYS and a weekly
+    won't happen -- we expire entries after STATE_EXPIRY_DAYS and a scheduled
     run typically adds fewer than 50 rows.
     """
     client = _get_supabase_client()

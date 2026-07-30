@@ -1,7 +1,8 @@
 -- 002_source_health_persistence.sql
 -- Persist per-run source health results for the CxA RFP Monitor.
 --
--- V1 stores the data only. No dashboard UI reads these tables yet.
+-- V1 stores source-health history. A server-side workflow reads these tables
+-- to generate sanitized static HTML; browser clients do not query them directly.
 
 create extension if not exists pgcrypto;
 

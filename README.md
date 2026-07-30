@@ -323,7 +323,7 @@ Expected output for every completed scheduled run:
 
 On the first Monday only, the original workflow attempt sends one additional monthly source-health summary after deployment.
 
-The opportunity digest may be a `No new RFPs this week` email if no new passing opportunities survive deduplication.
+The opportunity digest may be a `No new RFPs in this run` email if no new passing opportunities survive deduplication.
 
 ### Manual Workflow Inputs
 
@@ -454,11 +454,12 @@ Expected delivery-path log pattern:
 
 ```text
 SENDGRID_API_KEY not set. Skipping email delivery.
-SENDGRID_API_KEY not set. Skipping source health email.
-Delivery: email=FAILED | source_health_email=FAILED | dashboard=OK
+SUPABASE_URL or SUPABASE_KEY not set. Source-health persistence will be skipped.
+Delivery: email=FAILED | dashboard=OK
+Source health persistence: FAILED
 ```
 
-Because Supabase variables are blank in this test, warnings about skipped deduplication and failed seen-set save are expected.
+Because Supabase variables are blank in this test, warnings about skipped deduplication, skipped source-health persistence, and failed seen-set save are expected.
 
 ### Useful Local Test Commands
 
@@ -688,7 +689,7 @@ source_health_runs
 source_health_records
 ```
 
-The source-health tables are scoped by `monitor_type`. V1 enables row-level security and grants server-side access to `service_role`; the static dashboards do not read these tables.
+The source-health tables are scoped by `monitor_type`. V1 enables row-level security and grants access to `service_role`. The server-side workflow uses that role to read the history and generate sanitized static HTML; browser-loaded dashboards do not query these tables directly.
 
 All opportunity-state tables are scoped by `monitor_type` where applicable.
 
@@ -719,7 +720,7 @@ before importing `dedup.py` functions during the run. The scheduled workflow run
 
 ## Supabase Table: `opportunity_seen`
 
-Stores delivered opportunities so future weekly runs do not resend the same RFP.
+Stores delivered opportunities so future scheduled runs do not resend the same RFP.
 
 Expected schema:
 

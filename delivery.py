@@ -91,7 +91,7 @@ def send_email_digest(
     high_cnt  = sum(1 for o in opportunities if o.confidence == "High")
 
     if count == 0:
-        subject  = f"{subject_prefix} No new RFPs this week ({run_date})"
+        subject  = f"{subject_prefix} No new RFPs in this run ({run_date})"
         html_body = _render_no_results_email(run_date, monitor_type)
     else:
         subject   = (
@@ -252,7 +252,7 @@ def _render_digest_email(
     {body_sections}
     <hr style="border:none;border-top:1px solid #eee;margin:24px 0 16px 0;">
     <p style="font-size:11px;color:#aaa;margin:0;">
-      CxA RFP Monitor &mdash; Auto-generated weekly digest &mdash;
+      CxA RFP Monitor &mdash; Auto-generated opportunity digest &mdash;
       Keyword mode: {mode_label} &mdash;
       <a href="{dashboard_url}" style="color:#aaa;">
         Dashboard
@@ -272,7 +272,7 @@ def _render_no_results_email(run_date: str, monitor_type: str) -> str:
 <html>
 <body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
   <h2 style="color:#1a1a2e;">CxA RFP Monitor</h2>
-  <p>No new {monitor_label} RFP opportunities found this week ({run_date}).</p>
+  <p>No new {monitor_label} RFP opportunities found in this run ({run_date}).</p>
   <p>All monitored sources were checked. The monitor is running normally.</p>
   <p style="font-size:12px;color:#888;">
     <a href="{dashboard_url}">View dashboard</a>
@@ -296,7 +296,8 @@ def generate_dashboard(
     Write a static HTML dashboard to config.DASHBOARD_OUTPUT_PATH.
 
     The dashboard is regenerated on every run. The GitHub Actions workflow
-    commits it back to the repo, where GitHub Pages serves it.
+    uploads the generated pages as one artifact and deploys that artifact to
+    GitHub Pages; generated HTML is not committed by the workflow.
 
     Features:
       - Summary stat cards (new, high, medium, total)

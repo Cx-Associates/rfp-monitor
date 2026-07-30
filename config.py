@@ -474,7 +474,7 @@ MIN_SCORE_HIGH_CONFIDENCE = 15
 # ---------------------------------------------------------------------------
 
 SAM_API_BASE_URL   = "https://api.sam.gov/prod/opportunities/v2/search"
-SAM_LOOKBACK_DAYS  = 9      # Days back to search each run (9 = weekly + 2-day buffer)
+SAM_LOOKBACK_DAYS  = 9      # Covers twice-weekly gaps plus an outage/retry buffer
 SAM_MAX_RESULTS    = 100    # Results per query (API max 1000; keep lower)
 
 # NAICS codes most likely to yield EM&V / engineering evaluation consulting work

@@ -1,8 +1,8 @@
 """
 main.py -- Orchestrator for the CxA RFP Monitor
 ================================================
-Entry point for the full monitoring cycle. Called by GitHub Actions weekly
-or manually from the command line.
+Entry point for the full monitoring cycle. Called by the scheduled
+Monday/Thursday GitHub Actions workflow or manually from the command line.
 
 Run sequence:
   1. Parse arguments (mode, dry-run, sources)
@@ -10,8 +10,9 @@ Run sequence:
   3. Run configured scrapers
   4. Score and filter all raw opportunities
   5. Deduplicate against seen-set
-  6. Deliver: email digest + GitHub Pages dashboard
-  7. Mark delivered opportunities as seen; save state
+  6. Deliver: opportunity email digest + GitHub Pages dashboard
+  7. Persist source-health history (nonfatal if persistence is unavailable)
+  8. Mark delivered opportunities as seen; save state
 
 CLI flags:
   --mode [broad|medium]  Override config.KEYWORD_MODE for this run.
@@ -24,9 +25,9 @@ CLI flags:
                        google_cse (disabled), all. Default: all.
   --debug                Enable DEBUG logging (very verbose).
 
-Exit codes:
+Exit behavior:
   0 -- Normal completion (including "no new opportunities" -- that's not an error)
-  1 -- All scrapers returned 0 results AND state save failed (systemic failure)
+  Unhandled startup or runtime failures propagate to the shell as nonzero exits.
 
 KNOWN FAILURE POINTS:
   - Script assumes it runs from the repo root. GitHub Actions uses the repo

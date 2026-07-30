@@ -54,9 +54,9 @@ def _recorded_at_for_supabase(recorded_at: str) -> str:
     """
     Convert the existing display timestamp format to an ISO timestamp for Supabase.
 
-    Existing source-health email rendering expects recorded_at to remain a readable
-    string like '2026-07-28 15:40 UTC', so record_source_health keeps that format.
-    This helper only normalizes the value when persisting to timestamptz columns.
+    In-memory health records keep recorded_at as a readable UTC string such as
+    '2026-07-28 15:40 UTC' for logs and internal processing. This helper only
+    normalizes the value when persisting to Supabase timestamptz columns.
     """
     if not recorded_at:
         return _utc_now_iso()
