@@ -16,8 +16,13 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 HEALTH_OK_NONZERO = "HEALTH_OK_NONZERO"
+# Health codes are persisted as text rather than a database enum so new
+# operational states can be added without a schema migration. PARTIAL is
+# used when a multi-query source (currently SAM.gov) returns a mixture of
+# valid responses and failures; it must not be counted as a full success.
 HEALTH_WARN_ZERO = "HEALTH_WARN_ZERO"
 HEALTH_WARN_SKIPPED_JS = "HEALTH_WARN_SKIPPED_JS"
+HEALTH_WARN_PARTIAL = "HEALTH_WARN_PARTIAL"
 HEALTH_ERROR_EXCEPTION = "HEALTH_ERROR_EXCEPTION"
 HEALTH_WARN_TOTAL_ZERO = "HEALTH_WARN_TOTAL_ZERO"
 
@@ -104,6 +109,7 @@ def summarize_source_health(records: Optional[List[SourceHealthRecord]] = None) 
         HEALTH_OK_NONZERO: 0,
         HEALTH_WARN_ZERO: 0,
         HEALTH_WARN_SKIPPED_JS: 0,
+        HEALTH_WARN_PARTIAL: 0,
         HEALTH_ERROR_EXCEPTION: 0,
         HEALTH_WARN_TOTAL_ZERO: 0,
     }
@@ -146,11 +152,23 @@ def _get_supabase_client():
         return None
 
 
+def get_source_health_supabase_client():
+    """Return the configured client used by persistence and reporting.
+
+    Keeping one client factory ensures dashboard reads use the same
+    SUPABASE_URL/SUPABASE_KEY validation and dependency handling as
+    source-health writes. The wrapper is public so reporting code does
+    not depend directly on the private implementation helper.
+    """
+    return _get_supabase_client()
+
+
 def _health_level_counts(summary: dict) -> tuple:
     error_count = summary.get(HEALTH_ERROR_EXCEPTION, 0)
     warn_count = (
         summary.get(HEALTH_WARN_ZERO, 0)
         + summary.get(HEALTH_WARN_SKIPPED_JS, 0)
+        + summary.get(HEALTH_WARN_PARTIAL, 0)
         + summary.get(HEALTH_WARN_TOTAL_ZERO, 0)
     )
     ok_count = summary.get(HEALTH_OK_NONZERO, 0)

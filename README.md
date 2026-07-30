@@ -7,7 +7,7 @@ The same codebase currently supports two monitor types:
 1. **EM&V / Evaluation** (`emv`)
 2. **Commissioning / RCx** (`commissioning`)
 
-The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, state, municipal, and priority procurement sources, scores opportunities using monitor-specific keyword tiers, sends email digests, publishes GitHub Pages dashboards, sends separate source-health emails on applicable non-dry completion paths, and persists source-health history to Supabase.
+The monitor runs through GitHub Actions, scrapes configured federal, utility, quasi-public, state, municipal, and priority procurement sources, scores opportunities using monitor-specific keyword tiers, sends opportunity email digests, publishes opportunity and source-health GitHub Pages dashboards, persists source-health history to Supabase, and sends a first-Monday monthly source-health summary.
 
 ---
 
@@ -30,7 +30,7 @@ python main.py --mode broad --monitor-type commissioning --sources all
 
 Each monitor run is independent. Each run has its own monitor type, keyword set, score thresholds, dashboard output path, opportunity email recipients, source-health records, and Supabase table scope.
 
-Scheduled runs automatically expose `SENDGRID_API_KEY` to the Python process, so scheduled runs are expected to send opportunity digest emails and source-health emails if the GitHub secret is configured.
+Scheduled monitor runs expose `SENDGRID_API_KEY` for the two opportunity digests. Source-health email is not sent from either monitor process; one monthly summary is sent after a successful Pages deployment on the first Monday.
 
 ---
 
@@ -78,19 +78,21 @@ riazul.hoque@cx-assoc.com
 
 ### 2. GitHub Pages Dashboard
 
-The dashboard is a static GitHub Pages site with a landing page and one dashboard page per monitor.
+The dashboard is a static GitHub Pages site with a landing page, two opportunity dashboards, and one monthly source-health dashboard.
 
 | Page | Purpose |
 | --- | --- |
-| `docs/index.html` | Landing page linking to each monitor dashboard |
-| `docs/emv.html` | EM&V / Evaluation dashboard |
-| `docs/commissioning.html` | Commissioning / RCx dashboard |
+| `docs/index.html` | Landing page linking to all dashboards |
+| `docs/emv.html` | EM&V / Evaluation opportunity dashboard |
+| `docs/commissioning.html` | Commissioning / RCx opportunity dashboard |
+| `docs/source-health.html` | Previous-month source-health dashboard |
 
 Current live URLs are configured in `config.py`:
 
 ```text
 https://cx-associates.github.io/rfp-monitor/emv.html
 https://cx-associates.github.io/rfp-monitor/commissioning.html
+https://cx-associates.github.io/rfp-monitor/source-health.html
 ```
 
 The dashboard has:
@@ -118,11 +120,19 @@ The dashboard has:
 
 Manual promotion does not change the automated scoring result. It adds a human-review layer on top of the automated score so the team can intentionally surface a below-threshold or low-confidence item in the main dashboard while still seeing how the monitor originally scored it.
 
-### 3. Source-Health Email
+### 3. Monthly Source-Health Review
 
-Non-dry runs that reach the scored delivery paths send a separate source-health email through SendGrid. This email is intentionally separate from the opportunity digest. The all-scrapers-zero path preserves the existing behavior of generating an empty dashboard without sending this email, while still attempting to persist its health records.
+Source health is reviewed through a static dashboard plus one monthly SendGrid notification. The old per-monitor/per-run source-health emails have been removed; opportunity digest emails are unchanged.
 
-The source-health email is sent to:
+The source-health dashboard is:
+
+```text
+https://cx-associates.github.io/rfp-monitor/source-health.html
+```
+
+It is generated after both scheduled monitors finish and is deployed in the same GitHub Pages artifact as the opportunity dashboards. The public page contains aggregate statuses, counts, recent-run indicators, and data-completeness checks. It intentionally excludes raw exception messages, GitHub run identifiers, credentials, and request details.
+
+On the **first Monday of each month**, after GitHub Pages deploys successfully, the workflow sends a summary for the previous Eastern calendar month when that reporting month contains at least one completed source-health run. An empty reporting month is intentionally skipped, while the dashboard remains deployed. Notifications are sent to:
 
 ```text
 riazul.hoque@cx-assoc.com
@@ -130,20 +140,15 @@ liza.boyle@cx-assoc.com
 eric@cx-assoc.com
 ```
 
-The health email subject format is:
+The subject format is:
 
 ```text
-[CxA RFP Monitor Health] <Monitor Label> source report - <Date> (<error count> errors, <warning count> warnings)
+[CxA RFP Monitor] Monthly Source Health - <Month Year>: <count> sources to review
 ```
 
-Examples:
+The email includes a concise metric summary, a sanitized list of sources requiring investigation, and a link to the deployed dashboard. A workflow rerun (`GITHUB_RUN_ATTEMPT` greater than `1`) does not resend the monthly notification. Manual workflow dispatches do not send it. If the previous month has zero completed source-health runs, the workflow records a successful intentional skip and does not call SendGrid.
 
-```text
-[CxA RFP Monitor Health] EM&V / Evaluation source report - July 10, 2026 (0 errors, 12 warnings)
-[CxA RFP Monitor Health] Commissioning / RCx source report - July 10, 2026 (0 errors, 12 warnings)
-```
-
-Source-health records remain in memory during a run for email rendering, and each completed non-dry run attempts to persist them to `source_health_runs` and `source_health_records` in Supabase. Persistence failures are logged but do not block email, dashboard generation, or seen-state saves.
+Each completed non-dry monitor run still attempts to persist its in-memory source-health snapshot to `source_health_runs` and `source_health_records`. Persistence failures are logged but remain isolated from opportunity delivery, opportunity dashboards, and seen-state saves.
 
 ---
 
@@ -175,10 +180,9 @@ Each monitor run follows this flow:
 11. For non-dry runs, load active cached dashboard opportunities.
 12. Merge current passing opportunities with cached active opportunities.
 13. Deduplicate current passing opportunities against the monitor-specific Supabase seen-set unless `--force-all` is used.
-14. For non-dry runs, perform the delivery actions applicable to that completion path:
+14. For non-dry runs, perform the opportunity delivery actions applicable to that completion path:
    - the opportunity digest;
-   - the source-health email;
-   - the dashboard files.
+   - the monitor-specific opportunity dashboard files.
 15. Persist the run-level summary and source-level health records to Supabase. This write is nonfatal.
 16. Save newly delivered opportunities to the Supabase seen-set if at least one main delivery channel succeeds.
 
@@ -186,7 +190,7 @@ Important behavior:
 
 - The **opportunity digest** is for newly identified passing opportunities.
 - The **dashboard** is an active opportunity board.
-- The **source-health email** is for source monitoring and troubleshooting.
+- The **source-health dashboard and monthly email** summarize persisted source checks across both monitors; they are generated by the workflow after the individual monitor processes finish.
 - A broken source should not stop the full run.
 - Dry runs stop before delivery and state update.
 - If both email and dashboard delivery fail, opportunities are not marked as seen so the next run can retry delivery.
@@ -249,13 +253,19 @@ rfp-monitor/
 |-- models.py                                    # Opportunity dataclass and shared utilities
 |-- scorer.py                                    # Monitor-aware keyword scoring and manual-review filtering
 |-- dedup.py                                     # Supabase deduplication, active cache, suppression filtering, active-cache reload
-|-- delivery.py                                  # SendGrid emails, source-health email, dashboard generator, landing page generator
-|-- source_health.py                             # Source-health collection, summary, and Supabase persistence
+|-- delivery.py                                  # Opportunity email, opportunity dashboards, and landing page
+|-- source_health.py                             # Source-health collection and Supabase persistence
+|-- source_health_report.py                      # Aggregation, streaks, completeness, and Eastern time
+|-- source_health_dashboard.py                   # Sanitized static source-health dashboard renderer
+|-- generate_source_health_dashboard.py          # Paginated read-only Supabase report generator
+|-- source_health_email.py                       # Monthly email summary and renderers
+|-- send_monthly_source_health_email.py          # First-Monday guarded SendGrid sender
 |-- requirements.txt                             # Python dependencies
 |-- docs/
 |   |-- index.html                               # Landing page output
-|   |-- emv.html                                 # EM&V dashboard output
-|   `-- commissioning.html                       # Commissioning dashboard output
+|   |-- emv.html                                 # EM&V opportunity dashboard output
+|   |-- commissioning.html                       # Commissioning opportunity dashboard output
+|   `-- source-health.html                       # Monthly source-health dashboard output
 |-- scrapers/
 |   |-- __init__.py
 |   |-- sam_gov.py                               # SAM.gov federal API scraper
@@ -301,16 +311,17 @@ python main.py --mode broad --monitor-type emv --sources all
 python main.py --mode broad --monitor-type commissioning --sources all
 ```
 
-Scheduled runs provide SendGrid credentials to the Python process through GitHub Secrets, so scheduled runs are expected to send both opportunity digests and source-health emails.
+Scheduled runs provide SendGrid credentials for the opportunity digests. After both monitors persist source health, the workflow reads the previous Eastern month, generates `docs/source-health.html`, and deploys all dashboard pages together.
 
-Expected scheduled output volume if both runs complete and SendGrid is available:
+Expected output for every completed scheduled run:
 
 ```text
 1 EM&V opportunity digest
-1 EM&V source-health email
 1 commissioning opportunity digest
-1 commissioning source-health email
+1 shared GitHub Pages dashboard deployment
 ```
+
+On the first Monday only, the original workflow attempt sends one additional monthly source-health summary after deployment.
 
 The opportunity digest may be a `No new RFPs this week` email if no new passing opportunities survive deduplication.
 
@@ -329,11 +340,11 @@ GitHub -> Actions -> CxA RFP Monitor -> Run workflow
 | `dry_run` | If `true`, runs scrapers/scoring only and skips delivery/state update. |
 | `sources` | Source group to run: `sam`, `utilities`, `states_direct`, `google_cse`, or `all`. |
 | `force_all` | If `true`, skips deduplication and reports all passing opportunities. Use carefully. |
-| `send_email` | If `true`, exposes `SENDGRID_API_KEY` to the run and allows emails. If `false`, opportunity and source-health emails are skipped. |
+| `send_email` | If `true`, exposes `SENDGRID_API_KEY` to the monitor run and allows opportunity digest emails. It does not trigger the monthly source-health email. |
 
 Manual runs execute the selected `monitor_type`. If `both` is selected, the workflow runs EM&V first and then commissioning from the same workflow run.
 
-Manual runs only send email when `send_email` is set to `true`. This includes the opportunity digest and the source-health email.
+Manual runs only send opportunity digest email when `send_email` is set to `true`. Monthly source-health notification is restricted to the first-Monday scheduled workflow.
 
 ### GitHub Pages Behavior
 
@@ -350,6 +361,7 @@ The preview/deploy artifact includes:
 docs/index.html
 docs/emv.html
 docs/commissioning.html
+docs/source-health.html
 ```
 
 ### Supabase Keepalive Workflow
@@ -453,7 +465,7 @@ Because Supabase variables are blank in this test, warnings about skipped dedupl
 Compile key files:
 
 ```powershell
-python -m py_compile source_health.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
+python -m py_compile source_health.py source_health_report.py source_health_dashboard.py source_health_email.py generate_source_health_dashboard.py send_monthly_source_health_email.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
 ```
 
 Run both full dry runs:
@@ -476,6 +488,11 @@ Restore locally generated dashboard output before committing, unless the dashboa
 ```powershell
 git restore docs/index.html docs/emv.html docs/commissioning.html
 ```
+
+`docs/source-health.html` is generated by the workflow and may be untracked
+after a local production-generator test. Inspect it with `git status`; remove
+that specific local file only when it is confirmed to be disposable, and do
+not commit it unless a checked-in generated snapshot is intentional.
 
 ---
 
@@ -559,62 +576,93 @@ The old direct NYSERDA source is not part of the current direct-source inventory
 
 ## Source-Health Reporting
 
-Source-health tracking is implemented in `source_health.py` and used by `main.py`, `scrapers/web_sources.py`, and `delivery.py`.
+Source-health collection, persistence, aggregation, dashboard rendering, and monthly email rendering are separated across:
 
-Health records are collected in memory during a single Python process. Each completed non-dry run attempts to persist the same health snapshot to Supabase. Existing source-health email behavior remains separate and uses that same snapshot where the run path sends the email.
+| File | Responsibility |
+| --- | --- |
+| `source_health.py` | In-memory records and nonfatal Supabase persistence |
+| `source_health_report.py` | UTC/Eastern conversion, paired-run consolidation, streaks, and completeness checks |
+| `source_health_dashboard.py` | Sanitized static public dashboard rendering |
+| `generate_source_health_dashboard.py` | Paginated, read-only Supabase loading and monthly dashboard generation |
+| `source_health_email.py` | Side-effect-free monthly summary and email rendering |
+| `send_monthly_source_health_email.py` | First-Monday/rerun guard, read-only report loading, and SendGrid delivery |
 
-Current health codes:
+### Health Codes
 
 | Code | Meaning |
 | --- | --- |
-| `HEALTH_OK_NONZERO` | Source returned one or more candidates. |
-| `HEALTH_WARN_ZERO` | Source completed but returned 0 candidates. |
-| `HEALTH_WARN_SKIPPED_JS` | Source was skipped because it is marked `js_render=True` / Phase 2. |
-| `HEALTH_ERROR_EXCEPTION` | Source threw an exception that reached the source wrapper. |
-| `HEALTH_WARN_TOTAL_ZERO` | Entire source group returned 0 candidates. |
+| `HEALTH_OK_NONZERO` | The source returned one or more raw candidates. These candidates are not necessarily scored or delivered opportunities. |
+| `HEALTH_WARN_ZERO` | The source returned no raw candidates. This can be normal and is not automatically a failure. |
+| `HEALTH_WARN_SKIPPED_JS` | The source is intentionally skipped because it is JavaScript-rendered / deferred. |
+| `HEALTH_WARN_PARTIAL` | A multi-request source completed some API/parser work, but one or more requests or parsing steps failed; results may be incomplete. |
+| `HEALTH_ERROR_EXCEPTION` | The source/API was unavailable or failed without producing a valid source result. |
+| `HEALTH_WARN_TOTAL_ZERO` | Every source in a major source group returned zero candidates during that monitor execution. |
 
-### Interpreting Source-Health Emails
+SAM.gov now emits one explicit source-health record summarizing all configured API queries:
 
-A warning does not automatically mean the run failed.
+- complete API success with candidates -> `HEALTH_OK_NONZERO`;
+- complete API success with zero candidates -> `HEALTH_WARN_ZERO`;
+- mixed query/parser success and failure -> `HEALTH_WARN_PARTIAL`;
+- no valid API responses, or a missing API key -> `HEALTH_ERROR_EXCEPTION`.
 
-Examples:
+### How Monthly Aggregation Works
 
-- `HEALTH_WARN_ZERO` may be normal for sources that simply have no current RFPs.
-- `HEALTH_WARN_SKIPPED_JS` is expected for sources intentionally deferred to Phase 2.
-- `HEALTH_WARN_TOTAL_ZERO` is expected for SAM.gov in local runs where `SAM_API_KEY` is not set.
-- `HEALTH_ERROR_EXCEPTION` is more serious and usually means the scraper/source needs immediate review.
+A normal scheduled GitHub workflow runs EM&V and commissioning sequentially. Those parent rows share `github_run_id`. Source observations sharing the same workflow ID, source group, and source name are consolidated so a scheduled date counts once rather than twice.
 
-### Important V1 Limitation
+The dashboard displays monthly counts for the previous Eastern calendar month, while consecutive no-result streaks may use earlier persisted history through that month’s end. This prevents a streak from resetting on the first day of a month.
 
-Some lower-level fetch helpers catch HTTP/connection problems, log a warning, and return an empty result list. In those cases, the wrapper currently records `HEALTH_WARN_ZERO`, not `HEALTH_ERROR_EXCEPTION`.
+A source appears in **Sources Requiring Investigation** when:
 
-Known example from recent local runs:
+- its latest consolidated result is `ERROR`;
+- its latest consolidated result is `PARTIAL`; or
+- it has returned no results in **12 consecutive distinct live workflows**.
+
+Twelve no-result runs represent approximately 1.5 months at the current Monday/Thursday schedule. This is an investigation threshold, not automatic proof that a scraper failed. A later candidate-producing observation resets the consecutive no-result count.
+
+`HEALTH_WARN_TOTAL_ZERO` records are excluded from individual-source streaks. They are separately consolidated by workflow and source group for the dashboard’s Entire-Group Zero Events summary.
+
+### Time Zones
+
+Supabase stores all source-health timestamps as UTC `timestamptz` values. Human-facing dashboard and email timestamps are converted with `America/New_York` and labeled `EST` or `EDT` according to the date.
+
+For example:
 
 ```text
-Vermont VSIGNS
+Stored:    2026-07-28T15:40:00+00:00
+Displayed: July 28, 2026 at 11:40 AM EDT
 ```
 
-Recent local runs logged a DNS/name-resolution connection warning for VSIGNS, but the source-health record was:
+UTC remains the correct storage format because it is unambiguous and portable. Eastern conversion happens only at the reporting layer.
 
-```text
-HEALTH_WARN_ZERO
-```
+### Supabase Persistence and Permissions
 
-because the underlying fetch returned an empty result rather than raising an exception through the source wrapper.
+Each completed non-dry monitor run attempts:
 
-A future source-health classification update should distinguish:
+1. one parent insert into `source_health_runs`;
+2. zero or more detail inserts into `source_health_records`.
 
-```text
-true zero candidates
-fetch/page-load failure that returned zero
-parser failure that returned zero
-```
+The migration is `supabase/sql/002_source_health_persistence.sql`. It provides:
 
-### Supabase Source-Health Persistence
+- a foreign key from detail rows to parent runs with cascading deletion;
+- query indexes for report reads;
+- row-level security on both tables;
+- `service_role` select and insert access;
+- sequence usage required for detail-row IDs;
+- no public `anon` or ordinary `authenticated` policies.
 
-Each completed non-dry run attempts to write one parent row to `source_health_runs` and zero or more detail rows to `source_health_records`. The schema is defined in `supabase/sql/002_source_health_persistence.sql`. Dry runs do not write source-health history. Persistence failures are logged and isolated from delivery and seen-state saves.
+The production key must be the matching project’s modern secret/service-role credential. Controlled local checks verified client construction, SDK reads, and real parent/detail insert/select permission. REST deletion with the service credential is not granted; disposable cleanup can be performed in the Supabase SQL Editor under an administrative database role.
 
-Future enhancements can use this history to trend repeated zero-candidate sources, flag normally productive sources that suddenly drop to zero, and distinguish fetch failures from true zero-candidate pages.
+Persistence in `main.py` is deliberately nonfatal. A failed history write must not block opportunity email delivery, opportunity-dashboard generation, or seen-state saves. In contrast, the workflow’s monthly source-health read/generation step must succeed before the Pages artifact deploys, preventing a stale or missing source-health page from being advertised as current.
+
+### Public Dashboard Privacy
+
+The source-health page is deployed on the existing public GitHub Pages site. It requests and renders only fields needed for aggregation. Raw diagnostic messages and unnecessary workflow metadata are not requested by the production reader and are never rendered into the HTML or monthly email.
+
+### V1 Test Scope
+
+V1 was validated with visible, deterministic external scripts covering SAM result classification, aggregation, month-boundary streaks, UTC-to-Eastern conversion, HTML sanitization, pagination, workflow ordering, dry-run isolation, failure isolation, fake SendGrid delivery, real Supabase read/insert/select permission, and removal of per-run health emails.
+
+These validation scripts are not committed as a formal automated test suite. Adding committed unit/integration tests and CI execution is explicitly deferred to V2.
 
 ---
 
@@ -1460,7 +1508,7 @@ git status
 2. Compile key Python files:
 
 ```powershell
-python -m py_compile source_health.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
+python -m py_compile source_health.py source_health_report.py source_health_dashboard.py source_health_email.py generate_source_health_dashboard.py send_monthly_source_health_email.py config.py delivery.py main.py dedup.py scorer.py models.py scrapers/web_sources.py scrapers/sam_gov.py
 ```
 
 3. Run both full dry runs when scraper/scoring behavior changed:
@@ -1518,6 +1566,11 @@ print("\nGenerated dashboard validation passed.")
 ```powershell
 git restore docs/index.html docs/emv.html docs/commissioning.html
 ```
+
+`docs/source-health.html` is generated by the workflow and may be untracked
+after a local production-generator test. Inspect it with `git status`; remove
+that specific local file only when it is confirmed to be disposable, and do
+not commit it unless a checked-in generated snapshot is intentional.
 
 7. Confirm GitHub Actions secrets exist:
 
@@ -1580,7 +1633,9 @@ supabase functions deploy suppress-manual-review --project-ref udxcbyoohgzdkjxyt
     - commissioning dashboard timestamp updated;
     - landing page links work;
     - opportunity digest email behavior is as expected;
-    - source-health emails were sent when email delivery was enabled and the run reached an email-sending path;
+    - `source-health.html` deployed and its navigation links work;
+    - the monthly source-health email was sent only if this was the original first-Monday scheduled attempt and the previous reporting month contained at least one completed source-health run; otherwise, confirm the intentional skip in the workflow log;
+    - no per-run source-health emails were sent;
     - one `source_health_runs` row and the expected `source_health_records` rows were persisted for each completed non-dry monitor run;
     - Supabase active cache updated by monitor type;
     - `opportunity_seen` rows are scoped correctly by monitor type;
@@ -1608,17 +1663,26 @@ Also check:
 - `EMAIL_FROM` is authorized in SendGrid;
 - the relevant recipient list in `config.py` is correct.
 
-### Source-health email did not send
+### Monthly source-health email did not send
 
-Check the workflow log for:
+The monthly email is intentionally narrower than opportunity email delivery. Confirm all of the following:
+
+- the event was the original scheduled workflow run, not `workflow_dispatch`;
+- the run occurred on the first Monday in Eastern Time;
+- `GITHUB_RUN_ATTEMPT` was `1` (reruns skip duplicate notification);
+- the previous Eastern calendar month contains at least one completed `source_health_runs` row (empty reporting months are intentionally skipped);
+- the Pages deployment completed successfully before the email steps;
+- `SENDGRID_API_KEY`, `SUPABASE_URL`, and `SUPABASE_KEY` exist in GitHub Actions secrets;
+- `SOURCE_HEALTH_EMAIL_TO` and `EMAIL_FROM` in `config.py` are correct;
+- SendGrid accepted each message with HTTP `202`.
+
+The workflow step is named:
 
 ```text
-SENDGRID_API_KEY not set. Skipping source health email.
+Send first-Monday source-health email
 ```
 
-The source-health email uses the same `SENDGRID_API_KEY` as the opportunity digest.
-
-For manual workflow runs, `send_email` must be set to `true` for the source-health email to send.
+Manual runs do not send the monthly source-health email, even when the manual `send_email` input is `true`. That input controls opportunity digest delivery only.
 
 ### Dashboard did not deploy
 
@@ -1810,18 +1874,20 @@ Options:
 
 | Item | Status / Next Step |
 | --- | --- |
-| Source-health trend UI/alerts | V1 now persists run and detail history to Supabase. Trend visualization and automated repeated-failure alerts are not yet implemented. |
+| Source-health reporting | V1 now persists history, publishes a sanitized monthly dashboard, flags current errors/partial results and 12-run no-result streaks, and sends a first-Monday summary. A private raw-diagnostic drill-down is future work. |
+| Repository and dashboard access | V1 retains the current public GitHub Pages delivery under the organization's free GitHub plan. V2 should move proprietary source code to a private repository and place internal review dashboards behind authenticated hosting. Evaluate private GitHub Pages under a qualifying organization plan or an alternate authenticated host, and audit public forks, workflow artifacts/logs, and exposed review fields before migration. |
 | Vermont VSIGNS health code | Recent local runs show a DNS/name-resolution warning, but V1 records `HEALTH_WARN_ZERO` because the fetch helper returns an empty result. Future health tracking should distinguish fetch failure from true zero candidates. |
 | NYISO Procurement | Current configured URL has returned 404. Need replacement URL or disable source. |
 | National Grid | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Avangrid / United Illuminating | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Google CSE | Disabled in `main.py`; keep disabled unless an eligible working Google CSE project/API key is available. |
 | Generic scrapers | Can collect old PDFs, informational pages, or broad procurement rows. Dedicated parsers and manual-review suppression help manage noise. |
-| Source drift | Website redesigns may cause sources to return zero candidates without raising exceptions. Source-health history is now persisted, but trend visualization and alerting are still future work. |
+| Source drift | Website redesigns may cause zero results without raising exceptions. The dashboard flags 12 consecutive no-result runs for investigation, but lower-level fetch helpers still need richer failure classification in V2. |
 | BED detail pages | Detail pages may be Cloudflare-blocked. Parser uses listing links and may have limited scope/deadline text. |
 | NYSCR detail links | Detail pages may require login. Parser uses public listing fields and stable CR numbers. |
 | CT DEEP metadata | Search-result metadata may not expose due dates. |
 | Local Supabase warnings | Expected when local shells do not define `SUPABASE_URL` and `SUPABASE_KEY`. |
+| Committed automated tests | V1 used visible external deterministic checks. A committed automated unit/integration suite and CI test job are deferred to V2. |
 | `datetime.utcnow()` deprecation warning | Newer Python versions may warn that `datetime.utcnow()` is deprecated. This warning is not currently breaking the workflow but should be cleaned up later with timezone-aware UTC datetimes. |
 
 ---
@@ -1838,5 +1904,6 @@ Options:
 - Review fields and manual promotion use the `opportunity-review` Supabase Edge Function.
 - The manual-review X button uses the `suppress-manual-review` Supabase Edge Function.
 - Secrets are not embedded in static HTML.
-- Source-health email remains operational, and completed non-dry runs now attempt to persist source-health history to Supabase.
+- V1 intentionally retains the current public Pages deployment. Private repository and authenticated dashboard hosting are documented V2 hardening work, not a completed V1 security control.
+- Per-run source-health emails are retired. The first-Monday monthly email is sent only after the shared Pages dashboard deploys; completed non-dry monitor runs continue to persist history independently.
 - The scheduled production workflow must run from `main` for GitHub Pages deployment.

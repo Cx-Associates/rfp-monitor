@@ -20,3 +20,4 @@ urllib3>=2.0.0           # HTTP connection pooling (used by requests internally)
 #   json, os, sys, re, hashlib, datetime, logging, argparse
 #   dataclasses, typing, urllib.parse, time
 pypdf
+tzdata>=2024.1           # IANA timezone data for Eastern display on Windows

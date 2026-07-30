@@ -335,7 +335,7 @@ def main():
             f"and manual-review candidates."
         )
         if not args.dry_run:
-            from delivery import generate_dashboard, send_source_health_email
+            from delivery import generate_dashboard
             from source_health import (
                 get_source_health_records,
                 persist_source_health_records,
@@ -350,11 +350,6 @@ def main():
                 manual_review=manual_review,
                 monitor_type=monitor_type,
             )
-            send_source_health_email(
-                health_records,
-                monitor_type=monitor_type,
-            )
-
             health_persist_ok = persist_source_health_records(
                 health_records,
                 monitor_type=monitor_type,
@@ -404,7 +399,7 @@ def main():
     # -------------------------------------------------------------------------
     # Step 6: Deliver
     # -------------------------------------------------------------------------
-    from delivery import send_email_digest, generate_dashboard, send_source_health_email
+    from delivery import send_email_digest, generate_dashboard
     from source_health import (
         get_source_health_records,
         persist_source_health_records,
@@ -413,10 +408,6 @@ def main():
     health_records = get_source_health_records()
 
     email_ok    = send_email_digest(new_opps, mode=mode, monitor_type=monitor_type)
-    health_email_ok = send_source_health_email(
-        health_records,
-        monitor_type=monitor_type,
-    )
     dashboard_ok = generate_dashboard(
         new_opps,
         dashboard_opps,
@@ -434,7 +425,6 @@ def main():
 
     logger.info(
         f"Delivery: email={'OK' if email_ok else 'FAILED'} | "
-        f"source_health_email={'OK' if health_email_ok else 'FAILED'} | "
         f"dashboard={'OK' if dashboard_ok else 'FAILED'}"
     )
     logger.info(

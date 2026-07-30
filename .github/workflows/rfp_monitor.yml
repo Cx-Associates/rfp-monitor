@@ -132,6 +132,16 @@ jobs:
             done
           fi
 
+      # Generate the health page only after the monitor loop finishes.
+      # Scheduled workflows run EM&V and commissioning in that loop, so
+      # both parent/detail sets are persisted before this read begins.
+      - name: Generate source-health dashboard
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python generate_source_health_dashboard.py
+
       - name: Upload dashboard preview artifact
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         uses: actions/upload-artifact@v4
@@ -141,6 +151,7 @@ jobs:
             docs/index.html
             docs/emv.html
             docs/commissioning.html
+            docs/source-health.html
           if-no-files-found: warn
 
   deploy_pages:
@@ -171,3 +182,46 @@ jobs:
       - name: Deploy dashboard to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # The email promises that the dashboard is ready, so this gate
+      # and all notification steps intentionally follow deployment.
+      - name: Check first-Monday source-health email schedule
+        id: monthly_health_email
+        if: ${{ github.event_name == 'schedule' }}
+        shell: bash
+        run: |
+          eastern_weekday="$(TZ=America/New_York date +%u)"
+          eastern_day="$(TZ=America/New_York date +%-d)"
+          if [ "$eastern_weekday" = "1" ] && [ "$eastern_day" -le 7 ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "send=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository for monthly health email
+        if: ${{ steps.monthly_health_email.outputs.send == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          path: monthly-email-source
+
+      - name: Set up Python for monthly health email
+        if: ${{ steps.monthly_health_email.outputs.send == 'true' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: monthly-email-source/requirements.txt
+
+      - name: Install monthly health email dependencies
+        if: ${{ steps.monthly_health_email.outputs.send == 'true' }}
+        working-directory: monthly-email-source
+        run: pip install -r requirements.txt
+
+      - name: Send first-Monday source-health email
+        if: ${{ steps.monthly_health_email.outputs.send == 'true' }}
+        working-directory: monthly-email-source
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python send_monthly_source_health_email.py

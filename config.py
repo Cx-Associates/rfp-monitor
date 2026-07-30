@@ -1025,6 +1025,14 @@ DASHBOARD_OUTPUT_PATHS = {
 
 DASHBOARD_LANDING_PATH = "docs/index.html"
 
+# Source health is a third static page in the same GitHub Pages
+# artifact. Keeping its path and public URL here prevents the workflow
+# and monthly email from drifting to different destinations.
+SOURCE_HEALTH_DASHBOARD_OUTPUT_PATH = "docs/source-health.html"
+SOURCE_HEALTH_DASHBOARD_URL = (
+    "https://cx-associates.github.io/rfp-monitor/source-health.html"
+)
+
 DASHBOARD_URLS = {
     "emv": "https://cx-associates.github.io/rfp-monitor/emv.html",
     "commissioning": "https://cx-associates.github.io/rfp-monitor/commissioning.html",

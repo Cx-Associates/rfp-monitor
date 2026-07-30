@@ -41,58 +41,94 @@ import requests
 
 import config
 from models import Opportunity, normalize_date, clean_text
+from source_health import (
+    HEALTH_ERROR_EXCEPTION,
+    HEALTH_OK_NONZERO,
+    HEALTH_WARN_PARTIAL,
+    HEALTH_WARN_ZERO,
+    record_source_health,
+)
 
 logger = logging.getLogger(__name__)
 
 
+
 def fetch_sam_opportunities() -> List[Opportunity]:
     """
-    Run all SAM.gov queries (keyword + NAICS) and return a deduplicated
-    list of Opportunity objects.
+    Run all SAM.gov queries and return deduplicated Opportunity objects.
 
-    Returns an empty list (not an exception) if the API key is missing or
-    the API is unavailable, allowing the rest of the run to continue.
+    In addition to returning opportunities, this records one explicit SAM.gov
+    health result that distinguishes:
+      - successful API queries that returned candidates;
+      - successful API queries that returned zero candidates;
+      - partial query/API failures;
+      - complete API/configuration failure.
     """
     api_key = os.environ.get("SAM_API_KEY", "").strip()
     if not api_key:
+        message = (
+            "SAM_API_KEY is not set; no SAM.gov API queries were attempted."
+        )
         logger.warning(
             "SAM_API_KEY not set. Skipping SAM.gov source. "
             "Add this key to GitHub Actions Secrets."
+        )
+        record_source_health(
+            source_name="SAM.gov",
+            source_group="SAM.gov (Federal)",
+            code=HEALTH_ERROR_EXCEPTION,
+            candidate_count=None,
+            message=message,
         )
         return []
 
     logger.info("SAM.gov: starting queries...")
 
-    # Calculate date range for this run
     lookback = datetime.utcnow() - timedelta(days=config.SAM_LOOKBACK_DAYS)
-    posted_from = lookback.strftime("%m/%d/%Y")          # SAM expects MM/DD/YYYY
-    posted_to   = datetime.utcnow().strftime("%m/%d/%Y")
+    posted_from = lookback.strftime("%m/%d/%Y")
+    posted_to = datetime.utcnow().strftime("%m/%d/%Y")
 
-    # Collect raw API result dicts, keyed by noticeId to deduplicate
-    # across multiple queries
     seen_ids: dict = {}
 
-    # -----------------------------------------------------------------------
-    # Query set 1: Keyword-based searches
-    # Each query hits the title field of all recent solicitations
-    # -----------------------------------------------------------------------
-    for keyword in config.SAM_SEARCH_QUERIES:
-        results = _query_sam(
+    # SAM is not one request: a run consists of several keyword and NAICS
+    # queries. Track each query outcome so a valid empty response is not
+    # confused with a transport/API failure that also produced no rows.
+    attempted_queries = 0
+    successful_queries = 0
+    query_failures = []
+
+    def run_query(params: dict, query_label: str) -> list:
+        nonlocal attempted_queries, successful_queries
+
+        attempted_queries += 1
+        results, query_succeeded, failure_reason = _query_sam(
             api_key=api_key,
+            params=params,
+        )
+        if query_succeeded:
+            successful_queries += 1
+        else:
+            query_failures.append(
+                f"{query_label}: {failure_reason or 'unknown API failure'}"
+            )
+        return results
+
+    for keyword in config.SAM_SEARCH_QUERIES:
+        results = run_query(
             params={
-                "keyword":     keyword,
-                "postedFrom":  posted_from,
-                "postedTo":    posted_to,
-                "limit":       config.SAM_MAX_RESULTS,
-                "ptype":       "o,p,k",   # Solicitations, presolicitations, combined
+                "keyword": keyword,
+                "postedFrom": posted_from,
+                "postedTo": posted_to,
+                "limit": config.SAM_MAX_RESULTS,
+                "ptype": "o,p,k",
             },
+            query_label=f"keyword {keyword!r}",
         )
         for item in results:
-            nid = item.get("noticeId", "")
-            if nid and nid not in seen_ids:
-                seen_ids[nid] = item
+            notice_id = item.get("noticeId", "")
+            if notice_id and notice_id not in seen_ids:
+                seen_ids[notice_id] = item
 
-        # Polite delay between API calls
         time.sleep(config.REQUEST_DELAY_SECONDS)
 
     logger.info(
@@ -100,28 +136,22 @@ def fetch_sam_opportunities() -> List[Opportunity]:
         f"{len(config.SAM_SEARCH_QUERIES)} queries"
     )
 
-    # -----------------------------------------------------------------------
-    # Query set 2: NAICS code searches
-    # Catches EM&V RFPs with non-descriptive titles by filtering on service
-    # category. Returns all recent solicitations under each NAICS code,
-    # letting the scorer filter for EM&V relevance.
-    # -----------------------------------------------------------------------
     naics_new = 0
     for naics in config.SAM_NAICS_CODES:
-        results = _query_sam(
-            api_key=api_key,
+        results = run_query(
             params={
-                "naics":      naics,
+                "naics": naics,
                 "postedFrom": posted_from,
-                "postedTo":   posted_to,
-                "limit":      config.SAM_MAX_RESULTS,
-                "ptype":      "o,p,k",
+                "postedTo": posted_to,
+                "limit": config.SAM_MAX_RESULTS,
+                "ptype": "o,p,k",
             },
+            query_label=f"NAICS {naics}",
         )
         for item in results:
-            nid = item.get("noticeId", "")
-            if nid and nid not in seen_ids:
-                seen_ids[nid] = item
+            notice_id = item.get("noticeId", "")
+            if notice_id and notice_id not in seen_ids:
+                seen_ids[notice_id] = item
                 naics_new += 1
 
         time.sleep(config.REQUEST_DELAY_SECONDS)
@@ -132,34 +162,72 @@ def fetch_sam_opportunities() -> List[Opportunity]:
     )
     logger.info(f"SAM.gov total raw: {len(seen_ids)} unique notices")
 
-    # Parse raw dicts into Opportunity objects
     opportunities = []
-    for notice_id, raw in seen_ids.items():
-        opp = _parse_opportunity(raw)
-        if opp:
-            opportunities.append(opp)
+    parse_failures = 0
+    for raw in seen_ids.values():
+        opportunity = _parse_opportunity(raw)
+        if opportunity:
+            opportunities.append(opportunity)
+        else:
+            parse_failures += 1
+
+    failed_queries = attempted_queries - successful_queries
+
+    # Assign exactly one run-level SAM health code. Complete failure has
+    # highest priority, followed by partial query/parser failure. Only a
+    # fully successful query set may be called a clean candidate/zero run.
+    if successful_queries == 0:
+        health_code = HEALTH_ERROR_EXCEPTION
+    elif failed_queries > 0 or parse_failures > 0:
+        health_code = HEALTH_WARN_PARTIAL
+    elif opportunities:
+        health_code = HEALTH_OK_NONZERO
+    else:
+        health_code = HEALTH_WARN_ZERO
+
+    message = (
+        f"{attempted_queries} queries attempted; "
+        f"{successful_queries} succeeded; "
+        f"{failed_queries} failed; "
+        f"{len(opportunities)} unique candidates parsed"
+    )
+    if parse_failures:
+        message += f"; {parse_failures} candidate records failed to parse"
+    message += "."
+
+    if query_failures:
+        examples = "; ".join(query_failures[:3])
+        message += f" Failure examples: {examples}"
+
+    # One explicit record per monitor execution gives the monthly report
+    # consistent SAM coverage without persisting one row per API query.
+    record_source_health(
+        source_name="SAM.gov",
+        source_group="SAM.gov (Federal)",
+        code=health_code,
+        candidate_count=(
+            len(opportunities) if successful_queries > 0 else None
+        ),
+        message=message,
+    )
 
     logger.info(f"SAM.gov: {len(opportunities)} opportunities parsed")
     return opportunities
 
 
-def _query_sam(api_key: str, params: dict) -> list:
+def _query_sam(api_key: str, params: dict) -> tuple:
     """
-    Execute one query against the SAM.gov v2 search endpoint.
+    Execute one SAM.gov query.
 
-    Retries on transient HTTP errors (429, 500-503) with exponential backoff.
-    Returns an empty list on persistent failure rather than raising.
+    Returns:
+        (items, succeeded, failure_reason)
 
-    KNOWN FAILURE POINTS:
-      - HTTP 429: rate limit hit. Backoff waits 60/120/180 seconds.
-        If this happens frequently, switch to an entity-registered key.
-      - HTTP 200 with error JSON: SAM.gov sometimes returns 200 with an error
-        embedded in the body (no "opportunitiesData" key). We log the raw
-        response body on this condition for debugging.
-      - Connection timeout: Some SAM.gov endpoints are slow under load.
-        REQUEST_TIMEOUT in config.py limits individual request wait time.
+    `succeeded` means the API returned a valid response containing the
+    opportunitiesData field. A valid response containing zero items is still
+    successful and is intentionally distinguishable from a failed request.
     """
     query_params = {"api_key": api_key, **params}
+    last_failure_reason = "all retries exhausted"
 
     for attempt in range(1, config.REQUEST_MAX_RETRIES + 1):
         try:
@@ -172,6 +240,7 @@ def _query_sam(api_key: str, params: dict) -> list:
 
             if response.status_code == 429:
                 wait = 60 * attempt
+                last_failure_reason = "HTTP 429 rate limit"
                 logger.warning(
                     f"SAM.gov rate limited (429). "
                     f"Waiting {wait}s (attempt {attempt}/{config.REQUEST_MAX_RETRIES})"
@@ -181,6 +250,7 @@ def _query_sam(api_key: str, params: dict) -> list:
 
             if response.status_code in (500, 502, 503):
                 wait = 30 * attempt
+                last_failure_reason = f"HTTP {response.status_code} server error"
                 logger.warning(
                     f"SAM.gov server error {response.status_code}. "
                     f"Waiting {wait}s (attempt {attempt}/{config.REQUEST_MAX_RETRIES})"
@@ -191,40 +261,42 @@ def _query_sam(api_key: str, params: dict) -> list:
             response.raise_for_status()
             data = response.json()
 
-            # Detect error-in-200 condition (SAM.gov quirk)
-            # KNOWN FAILURE POINT: The error structure has changed across
-            # API versions. If this check starts missing errors, log
-            # response.text and inspect the actual structure.
+            # HTTP 200 alone is not proof of success: SAM sometimes embeds
+            # an API error in a JSON body without opportunitiesData.
             if "opportunitiesData" not in data:
                 logger.warning(
-                    f"SAM.gov response missing 'opportunitiesData' key. "
+                    "SAM.gov response missing 'opportunitiesData' key. "
                     f"Possible API error. Response snippet: {str(data)[:300]}"
                 )
-                return []
+                return [], False, "valid HTTP response lacked opportunitiesData"
 
-            return data.get("opportunitiesData", [])
+            return data.get("opportunitiesData", []), True, ""
 
         except requests.exceptions.Timeout:
+            last_failure_reason = "request timeout"
             logger.warning(
                 f"SAM.gov timeout (attempt {attempt}/{config.REQUEST_MAX_RETRIES})"
             )
             if attempt < config.REQUEST_MAX_RETRIES:
                 time.sleep(15)
 
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"SAM.gov connection error: {e}")
-            return []   # Connection errors are unlikely to be transient; don't retry
+        except requests.exceptions.ConnectionError as exc:
+            logger.warning(f"SAM.gov connection error: {exc}")
+            return [], False, "connection error"
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"SAM.gov unexpected error: {e}")
-            return []
+        except requests.exceptions.RequestException as exc:
+            logger.error(f"SAM.gov unexpected error: {exc}")
+            return [], False, f"HTTP request error ({type(exc).__name__})"
+
+        except ValueError as exc:
+            logger.error(f"SAM.gov returned invalid JSON: {exc}")
+            return [], False, "invalid JSON response"
 
     logger.error(
         f"SAM.gov: all {config.REQUEST_MAX_RETRIES} retries failed. "
         f"Params: {params}"
     )
-    return []
-
+    return [], False, last_failure_reason
 
 def _parse_opportunity(raw: dict) -> Optional[Opportunity]:
     """
