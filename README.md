@@ -132,6 +132,8 @@ https://cx-associates.github.io/rfp-monitor/source-health.html
 
 It is generated after both scheduled monitors finish and is deployed in the same GitHub Pages artifact as the opportunity dashboards. The public page contains aggregate statuses, counts, recent-run indicators, and data-completeness checks. It intentionally excludes raw exception messages, GitHub run identifiers, credentials, and request details.
 
+The page is regenerated after every eligible non-dry workflow, but it intentionally reports the **previous Eastern calendar month**, not the month currently in progress. For example, workflows running during August publish the July report; August history first appears after the first eligible September workflow. If the previous month contains no completed source-health runs, a valid empty dashboard is still generated and deployed. This is expected behavior rather than a dashboard-generation failure.
+
 On the **first Monday of each month**, after GitHub Pages deploys successfully, the workflow sends a summary for the previous Eastern calendar month when that reporting month contains at least one completed source-health run. An empty reporting month is intentionally skipped, while the dashboard remains deployed. Notifications are sent to:
 
 ```text
@@ -515,6 +517,13 @@ Use the `--sources` CLI argument locally or the `sources` workflow input in GitH
 
 This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES` configuration.
 
+The current production inventory contains **48 configured source concepts**. A normal monitor run creates source-health observations for **44 tracked sources**:
+
+- 42 active entries from `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES`;
+- SAM.gov and NASEO, which are handled by dedicated scrapers outside those two lists.
+
+The other four configured entries are inactive. Two of the 44 tracked sources--National Grid and Avangrid / United Illuminating--are intentionally recorded as JavaScript-rendered skips rather than actively scraped. With the current inventory, each completed monitor run should therefore persist 44 detail records. A normal scheduled workflow runs both monitor types and should persist 88 detail records across two parent runs. If the source inventory changes, these expected counts must be updated.
+
 ### Utility / Quasi-Public Sources
 
 | Source | Parser Type / Status |
@@ -664,6 +673,58 @@ The source-health page is deployed on the existing public GitHub Pages site. It 
 V1 was validated with visible, deterministic external scripts covering SAM result classification, aggregation, month-boundary streaks, UTC-to-Eastern conversion, HTML sanitization, pagination, workflow ordering, dry-run isolation, failure isolation, fake SendGrid delivery, real Supabase read/insert/select permission, and removal of per-run health emails.
 
 These validation scripts are not committed as a formal automated test suite. Adding committed unit/integration tests and CI execution is explicitly deferred to V2.
+
+### Production Source-Health Verification
+
+After a scheduled production workflow, use the GitHub run ID from the Actions log to reconcile each parent row with its persisted detail rows. This query is read-only:
+
+```sql
+select
+  r.monitor_type,
+  r.github_run_id,
+  r.github_run_attempt,
+  r.total_records as expected_records,
+  count(d.id) as persisted_records,
+  r.ok_count,
+  r.warn_count,
+  r.error_count
+from public.source_health_runs r
+left join public.source_health_records d
+  on d.run_id = r.id
+where r.github_run_id = 'PASTE_GITHUB_RUN_ID_HERE'
+group by
+  r.id,
+  r.monitor_type,
+  r.github_run_id,
+  r.github_run_attempt,
+  r.total_records,
+  r.ok_count,
+  r.warn_count,
+  r.error_count
+order by r.monitor_type;
+```
+
+For a normal scheduled workflow using the current 44-source inventory, expect two rows--one `emv` and one `commissioning`--with 44 expected and 44 persisted records in each row.
+
+To exercise the production read/aggregation/render path without changing the database, generate a preview for a completed month. The reference time must fall in the month after the reporting month:
+
+```powershell
+$healthPreview = Join-Path $env:TEMP "source_health_monthly_preview.html"
+
+python -B .\generate_source_health_dashboard.py `
+  --output $healthPreview `
+  --reference-time "2026-09-01T12:00:00-04:00"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "SOURCE-HEALTH DASHBOARD READ TEST FAILED"
+}
+
+Get-Item -LiteralPath $healthPreview |
+    Select-Object FullName, Length, LastWriteTime
+Start-Process -FilePath $healthPreview
+```
+
+This command performs Supabase SELECT requests and writes only the specified local preview file. It does not insert, update, or delete database rows and does not send email.
 
 ---
 
@@ -1890,6 +1951,7 @@ Options:
 | Local Supabase warnings | Expected when local shells do not define `SUPABASE_URL` and `SUPABASE_KEY`. |
 | Committed automated tests | V1 used visible external deterministic checks. A committed automated unit/integration suite and CI test job are deferred to V2. |
 | `datetime.utcnow()` deprecation warning | Newer Python versions may warn that `datetime.utcnow()` is deprecated. This warning is not currently breaking the workflow but should be cleaned up later with timezone-aware UTC datetimes. |
+| GitHub Actions Node runtime notices | The August 2026 production deployment succeeded, but GitHub logged notices that some action internals were being moved from Node 20 to Node 24. Periodically review and update the pinned official action versions before GitHub removes compatibility fallbacks. Treat this as maintenance work, not evidence that the current workflow failed. |
 
 ---
 
