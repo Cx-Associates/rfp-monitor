@@ -1760,9 +1760,9 @@ While GitHub reports an Actions or Pages incident, wait rather than repeatedly r
 
 To publish the preserved files after service recovery:
 
-1. Open **Actions** -> **Redeploy Existing Dashboard** -> **Run workflow**.
-2. Select the `main` branch.
-3. Enter the numeric run ID of the successful **CxA RFP Monitor** run containing `rfp-dashboard-preview` as `source_run_id`.
+1. Open the failed workflow run's **Summary** page and find **Dashboard recovery information**. Copy the displayed **Source workflow run ID**. For an older run without this summary, copy the number after `/actions/runs/` in the browser URL.
+2. Follow the displayed **Redeploy Existing Dashboard** link and select **Run workflow**.
+3. Select the `main` branch and paste the copied number into `source_run_id`.
 4. Start one new recovery run and verify that all four dashboard files pass validation before deployment.
 
 The recovery workflow only downloads, validates, and deploys the existing dashboard files. It does not scrape sources, write Supabase records, send opportunity emails, or send the monthly source-health email. If this failure occurs on the first Monday of a month, record that the monthly email was not sent and decide separately whether a follow-up notification is needed after the dashboard is available.

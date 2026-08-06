@@ -143,6 +143,7 @@ jobs:
         run: python generate_source_health_dashboard.py
 
       - name: Upload dashboard preview artifact
+        id: dashboard_preview
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
         uses: actions/upload-artifact@v4
         with:
@@ -153,6 +154,24 @@ jobs:
             docs/commissioning.html
             docs/source-health.html
           if-no-files-found: warn
+
+      # Put the recovery reference on the run's Summary page so a maintainer
+      # does not have to infer the source run ID from the browser URL. This is
+      # production-only and appears only after the preview artifact exists.
+      - name: Add dashboard recovery information to run summary
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true') && steps.dashboard_preview.outputs.artifact-id != '' }}
+        shell: bash
+        run: |
+          {
+            echo "### Dashboard recovery information"
+            echo ""
+            echo "- **Source workflow run ID:** \`$GITHUB_RUN_ID\`"
+            echo "- **Preview artifact:** \`rfp-dashboard-preview\`"
+            echo "- **Current run:** [Open workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- **Recovery workflow:** [Redeploy Existing Dashboard]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/redeploy_dashboard.yml)"
+            echo ""
+            echo "If Pages fails after **RFP Monitor Run** succeeds, open the recovery workflow, select \`main\`, and enter the source workflow run ID shown above."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   deploy_pages:
     name: Deploy dashboard to GitHub Pages
