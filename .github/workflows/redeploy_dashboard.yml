@@ -1,0 +1,92 @@
+name: Redeploy Existing Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Workflow run ID containing the rfp-dashboard-preview artifact"
+        required: true
+        type: string
+
+# The recovery job only reads an existing Actions artifact and publishes it.
+# It does not run the monitors or access application credentials.
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+# Share the same Pages concurrency group as the regular monitor workflow so
+# two dashboard deployments cannot run at the same time.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  redeploy_pages:
+    name: Redeploy existing dashboard to GitHub Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # Validate the operator-provided run ID before using it in an artifact
+      # request. GitHub workflow run IDs contain digits only.
+      - name: Validate source workflow run ID
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "source_run_id must contain digits only."
+            exit 1
+          fi
+
+      # Download the already-generated dashboards from the selected monitor
+      # run. This avoids scraping sources, writing health rows, or sending mail.
+      - name: Download existing dashboard preview
+        uses: actions/download-artifact@v4
+        with:
+          name: rfp-dashboard-preview
+          path: docs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+
+      # Fail visibly if the source artifact is incomplete rather than
+      # publishing a partial dashboard site.
+      - name: Validate dashboard files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dashboard_file in index.html emv.html commissioning.html source-health.html; do
+            if [[ ! -s "docs/$dashboard_file" ]]; then
+              echo "Missing or empty dashboard file: docs/$dashboard_file"
+              exit 1
+            fi
+          done
+          echo "All four dashboard files are present."
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      # A run-and-attempt-specific name prevents immutable artifact collisions
+      # when a maintainer retries this recovery workflow.
+      - name: Upload dashboard artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs
+
+      # GitHub's default is ten minutes. Thirty minutes tolerates a temporary
+      # Pages backlog while still failing cleanly if the service remains stuck.
+      - name: Deploy dashboard to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+          timeout: 1800000
