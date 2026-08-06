@@ -82,11 +82,12 @@ jobs:
           name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: docs
 
-      # GitHub's default is ten minutes. Thirty minutes tolerates a temporary
-      # Pages backlog while still failing cleanly if the service remains stuck.
+      # deploy-pages v4 waits for at most ten minutes. If GitHub reports
+      # an Actions or Pages incident, wait for recovery and start a new manual
+      # recovery run instead of repeatedly rerunning a queued deployment.
       - name: Deploy dashboard to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
-          timeout: 1800000
+          timeout: 600000

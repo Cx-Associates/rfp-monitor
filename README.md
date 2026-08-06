@@ -1748,11 +1748,26 @@ Manual runs do not send the monthly source-health email, even when the manual `s
 
 ### Dashboard did not deploy
 
-Check whether the workflow ran from `main`.
+First confirm that the workflow ran from `main` and was not a dry run. Feature branches create a downloadable dashboard preview but do not publish GitHub Pages, and dry runs do not create or publish dashboard files.
 
-Feature branches upload a dashboard preview artifact but do not deploy to GitHub Pages.
+Next, inspect the two jobs separately:
 
-Also check whether the run was a dry run. Dry-run workflow dispatches do not upload/deploy dashboard files.
+- If **RFP Monitor Run** failed, troubleshoot the monitor before attempting a deployment.
+- If **RFP Monitor Run** succeeded and its `rfp-dashboard-preview` artifact contains `index.html`, `emv.html`, `commissioning.html`, and `source-health.html`, the dashboard files are preserved. Do not rerun the monitors merely to publish those same files.
+- If only **Deploy dashboard to GitHub Pages** failed or remained queued, check [GitHub Status](https://www.githubstatus.com/) for an Actions or Pages incident.
+
+While GitHub reports an Actions or Pages incident, wait rather than repeatedly rerunning the workflow. Repeated attempts cannot correct a GitHub service outage and can add confusing failed runs. After both services return to operational, allow approximately ten minutes for GitHub to process its backlog.
+
+To publish the preserved files after service recovery:
+
+1. Open **Actions** -> **Redeploy Existing Dashboard** -> **Run workflow**.
+2. Select the `main` branch.
+3. Enter the numeric run ID of the successful **CxA RFP Monitor** run containing `rfp-dashboard-preview` as `source_run_id`.
+4. Start one new recovery run and verify that all four dashboard files pass validation before deployment.
+
+The recovery workflow only downloads, validates, and deploys the existing dashboard files. It does not scrape sources, write Supabase records, send opportunity emails, or send the monthly source-health email. If this failure occurs on the first Monday of a month, record that the monthly email was not sent and decide separately whether a follow-up notification is needed after the dashboard is available.
+
+The regular and recovery workflows use run-and-attempt-specific Pages artifact names, so a failed-job retry will not collide with an earlier immutable artifact. The Pages action still stops after its documented ten-minute wait. If a deployment again remains queued for the full interval, recheck GitHub Status and wait before starting a new recovery run. Keep the original `rfp-dashboard-preview` artifact because it is the source for deployment-only recovery.
 
 ### Dashboard landing page is updated but one monitor page is stale
 

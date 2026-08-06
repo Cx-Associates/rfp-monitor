@@ -174,14 +174,19 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      # Each workflow attempt gets a distinct immutable artifact. This
+      # keeps a failed-job rerun from colliding with the first attempt.
       - name: Upload dashboard artifact
         uses: actions/upload-pages-artifact@v3
         with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: docs
 
       - name: Deploy dashboard to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
       # The email promises that the dashboard is ready, so this gate
       # and all notification steps intentionally follow deployment.
