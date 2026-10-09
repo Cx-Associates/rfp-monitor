@@ -426,6 +426,18 @@ def _render_dashboard_html(
             if is_manual_promoted
             else ""
         )
+        # Main-table rows can be hidden without deleting their seen-history,
+        # active-cache, or review records. Manual-review rows keep their
+        # existing suppression control until they are promoted to the main
+        # table, at which point JavaScript adds this reversible control.
+        visibility_button = ""
+        if not allow_remove:
+            visibility_button = (
+                '<button type="button" class="dashboard-visibility-btn" '
+                'title="Remove this opportunity from the main dashboard without deleting its records" '
+                'onclick="toggleDashboardVisibility(this)">Hide from dashboard</button>'
+            )
+
         review_cell = (
             '<td class="review-cell">'
             '<div class="review-controls">'
@@ -460,6 +472,7 @@ def _render_dashboard_html(
             '<label class="review-note"><span class="review-label">Admin Review Notes <span class="review-help" title="Admin tracking such as F drive, HubSpot, deadline check, or duplicate handling.">i</span></span>'
             '<textarea class="admin-review-notes" rows="2" placeholder="Admin notes / F drive / HubSpot"></textarea></label>'
             '<button type="button" class="review-save" onclick="saveReviewRow(this)">Save notes</button>'
+            f'{visibility_button}'
             '<span class="review-msg"></span>'
             '</div></td>'
         )
@@ -602,6 +615,11 @@ def _render_dashboard_html(
     .review-note{{grid-column:span 2;}}
     .review-save{{grid-column:1 / 2;border:0;background:#1a1a2e;color:#fff;border-radius:4px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer;}}
     .review-save:hover{{background:#30304d;}}
+    .dashboard-visibility-btn{{grid-column:2 / 3;border:1px solid #cfd4da;background:#fff;color:#555;border-radius:4px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer;}}
+    .dashboard-visibility-btn:hover{{border-color:#b71c1c;color:#b71c1c;background:#fff7f7;}}
+    .dashboard-visibility-btn.restore{{border-color:#2e7d32;color:#2e7d32;background:#f4fff6;}}
+    .dashboard-visibility-btn.restore:hover{{background:#e8f5e9;}}
+    .dashboard-visibility-btn:disabled{{opacity:.6;cursor:wait;}}
     .review-msg{{align-self:center;color:#666;font-size:10px;}}
     @media (max-width:1200px){{
       .review-cell{{width:620px;min-width:620px;}}
@@ -612,6 +630,13 @@ def _render_dashboard_html(
                     box-shadow:0 1px 3px rgba(0,0,0,.1);padding:12px 16px;}}
     .manual-review summary{{cursor:pointer;font-weight:700;color:#1a1a2e;}}
     .manual-review p{{font-size:12px;color:#777;margin:8px 0 10px 0;}}
+    .hidden-opportunities{{margin:0 28px 28px;background:#fff;border-radius:8px;
+                          box-shadow:0 1px 3px rgba(0,0,0,.1);padding:12px 16px;}}
+    .hidden-opportunities summary{{cursor:pointer;font-weight:700;color:#1a1a2e;}}
+    .hidden-opportunities p{{font-size:12px;color:#777;margin:8px 0 10px 0;}}
+    .hidden-table{{padding:8px 0 0;}}
+    .hidden-table table{{box-shadow:none;border:1px solid #eee;}}
+    #hidden-opportunities-body tr td{{background:#fafafa;}}
     .manual-table{{padding:8px 0 0;}}
     .manual-table table{{box-shadow:none;border:1px solid #eee;}}
     .remove-cell{{text-align:center;width:38px;}}
@@ -643,10 +668,10 @@ def _render_dashboard_html(
   </nav>
 
   <div class="stats">
-    <div class="stat"><div class="n">{new_cnt}</div><div class="l">New this run</div></div>
-    <div class="stat"><div class="n" style="color:#2e7d32">{high_cnt}</div>
+    <div class="stat"><div class="n" id="new-count">{new_cnt}</div><div class="l">New this run</div></div>
+    <div class="stat"><div class="n" id="high-count" style="color:#2e7d32">{high_cnt}</div>
       <div class="l">High confidence</div></div>
-    <div class="stat"><div class="n" style="color:#e65100">{medium_cnt}</div>
+    <div class="stat"><div class="n" id="medium-count" style="color:#e65100">{medium_cnt}</div>
       <div class="l">Medium confidence</div></div>
     <div class="stat"><div class="n" id="total-count">{total_cnt}</div><div class="l">Total active</div></div>
     <div class="stat"><div class="n" id="manual-count">{manual_cnt}</div><div class="l">Manual review</div></div>
@@ -690,6 +715,29 @@ def _render_dashboard_html(
       </tbody>
     </table>
   </div>
+
+  <details class="hidden-opportunities" id="hidden-opportunities-section">
+    <summary>Hidden opportunities (<span id="hidden-opportunities-count">0</span>)</summary>
+    <p>
+      These RFPs were intentionally removed from the main opportunity table.
+      Their Supabase history and review notes were retained. Use
+      <strong>Restore to dashboard</strong> to return an item to the main table.
+    </p>
+    <div class="tbl-wrap hidden-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
+            <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
+            <th>Team Review</th><th>Keywords</th>
+          </tr>
+        </thead>
+        <tbody id="hidden-opportunities-body">
+          <tr class="hidden-empty"><td colspan="10" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
 
   <details class="manual-review">
     <summary>Manual review candidates (<span id="manual-summary-count">{manual_cnt}</span> below threshold)</summary>
@@ -793,6 +841,7 @@ def _render_dashboard_html(
       }}
 
       applyManualPromotionState(row);
+      applyDashboardVisibilityState(row, record.dashboard_hidden === true);
     }}
 
     function hasReviewText(value) {{
@@ -851,9 +900,13 @@ def _render_dashboard_html(
     function updateManualReviewCounts() {{
       const manualBody = document.getElementById('manual-review-body');
       const mainBody = document.getElementById('tbody');
+      const hiddenBody = document.getElementById('hidden-opportunities-body');
 
       if (manualBody) {{
         manualBody.querySelectorAll('tr.manual-empty').forEach(row => row.remove());
+      }}
+      if (hiddenBody) {{
+        hiddenBody.querySelectorAll('tr.hidden-empty').forEach(row => row.remove());
       }}
 
       const manualRows = manualBody
@@ -862,18 +915,33 @@ def _render_dashboard_html(
       const mainRows = mainBody
         ? mainBody.querySelectorAll('tr[data-unique-key]')
         : [];
+      const hiddenRows = hiddenBody
+        ? hiddenBody.querySelectorAll('tr[data-unique-key]')
+        : [];
 
       const manualCount = document.getElementById('manual-count');
       const manualSummaryCount = document.getElementById('manual-summary-count');
       const totalCount = document.getElementById('total-count');
+      const hiddenCount = document.getElementById('hidden-opportunities-count');
+      const newCount = document.getElementById('new-count');
+      const highCount = document.getElementById('high-count');
+      const mediumCount = document.getElementById('medium-count');
 
       if (manualCount) manualCount.textContent = manualRows.length;
       if (manualSummaryCount) manualSummaryCount.textContent = manualRows.length;
       if (totalCount) totalCount.textContent = mainRows.length;
+      if (hiddenCount) hiddenCount.textContent = hiddenRows.length;
+      if (newCount) newCount.textContent = Array.from(mainRows).filter(row => row.classList.contains('row-new')).length;
+      if (highCount) highCount.textContent = Array.from(mainRows).filter(row => row.dataset.conf === 'High').length;
+      if (mediumCount) mediumCount.textContent = Array.from(mainRows).filter(row => row.dataset.conf === 'Medium').length;
 
       if (manualBody && manualRows.length === 0) {{
         manualBody.innerHTML =
           '<tr class="manual-empty"><td colspan="11" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+      }}
+      if (hiddenBody && hiddenRows.length === 0) {{
+        hiddenBody.innerHTML =
+          '<tr class="hidden-empty"><td colspan="10" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>';
       }}
     }}
 
@@ -902,6 +970,59 @@ def _render_dashboard_html(
       if (cell) cell.remove();
     }}
 
+    function ensureDashboardVisibilityButton(row) {{
+      if (!row || row.querySelector('.dashboard-visibility-btn')) return;
+      const controls = row.querySelector('.review-controls');
+      if (!controls) return;
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'dashboard-visibility-btn';
+      button.textContent = 'Hide from dashboard';
+      button.addEventListener('click', () => toggleDashboardVisibility(button));
+
+      const message = controls.querySelector('.review-msg');
+      controls.insertBefore(button, message || null);
+    }}
+
+    function removeDashboardVisibilityButton(row) {{
+      const button = row ? row.querySelector('.dashboard-visibility-btn') : null;
+      if (button) button.remove();
+      if (row) row.dataset.dashboardHidden = 'false';
+    }}
+
+    function applyDashboardVisibilityState(row, hidden) {{
+      if (!row) return;
+
+      const button = row.querySelector('.dashboard-visibility-btn');
+      // Below-threshold manual-review rows are not members of the main
+      // dashboard and therefore do not participate in this hide/restore flow.
+      if (!button) return;
+
+      const mainBody = document.getElementById('tbody');
+      const hiddenBody = document.getElementById('hidden-opportunities-body');
+      if (!mainBody || !hiddenBody) return;
+
+      row.dataset.dashboardHidden = hidden ? 'true' : 'false';
+      button.disabled = false;
+
+      if (hidden) {{
+        hiddenBody.querySelectorAll('tr.hidden-empty').forEach(empty => empty.remove());
+        button.textContent = 'Restore to dashboard';
+        button.classList.add('restore');
+        button.title = 'Return this opportunity to the main dashboard table';
+        if (row.parentElement !== hiddenBody) hiddenBody.prepend(row);
+      }} else {{
+        button.textContent = 'Hide from dashboard';
+        button.classList.remove('restore');
+        button.title = 'Remove this opportunity from the main dashboard without deleting its records';
+        if (row.parentElement === hiddenBody) mainBody.prepend(row);
+      }}
+
+      updateManualReviewCounts();
+      applyFilters();
+    }}
+
     function applyManualPromotionState(row) {{
       if (!row) return;
 
@@ -917,6 +1038,7 @@ def _render_dashboard_html(
         row.classList.add('promoted-manual');
         addPromotionBadge(row);
         removeManualRemoveCell(row);
+        ensureDashboardVisibilityButton(row);
 
         // Prevent duplicates when a persisted promoted row is already in the main table
         // and the same scraped item also appears in manual review after regeneration.
@@ -944,6 +1066,7 @@ def _render_dashboard_html(
         row.classList.remove('promoted-manual');
         removePromotionBadge(row);
         ensureManualRemoveCell(row);
+        removeDashboardVisibilityButton(row);
 
         if (manualBody && row.parentElement !== manualBody) {{
           manualBody.querySelectorAll('tr.manual-empty').forEach(empty => empty.remove());
@@ -987,12 +1110,12 @@ def _render_dashboard_html(
       }}
     }}
 
-    async function saveReviewRow(control) {{
+    async function saveReviewRow(control, options = {{}}) {{
       const row = control.closest('tr');
-      if (!row) return;
+      if (!row) return false;
 
       const token = getReviewToken('Enter dashboard edit token');
-      if (!token) return;
+      if (!token) return false;
 
       const msg = row.querySelector('.review-msg');
       if (msg) msg.textContent = 'Saving...';
@@ -1015,6 +1138,9 @@ def _render_dashboard_html(
         matched_keywords: row.dataset.matchedKeywords || '',
         manual_review: row.dataset.manualReview === 'true' || row.dataset.manualPromoted === 'true',
         manual_promoted: rowQualifiesForManualPromotion(row),
+        dashboard_hidden: Object.prototype.hasOwnProperty.call(options, 'dashboardHidden')
+          ? options.dashboardHidden
+          : row.dataset.dashboardHidden === 'true',
 
         review_status: getReviewField(row, '.review-status'),
         reviewer_fit: getReviewField(row, '.reviewer-fit'),
@@ -1052,7 +1178,7 @@ def _render_dashboard_html(
             if (msg) msg.textContent = 'Save failed';
             alert('Could not save review fields: ' + (result.error || response.status));
           }}
-          return;
+          return false;
         }}
 
         if (result.record) {{
@@ -1064,9 +1190,34 @@ def _render_dashboard_html(
         }}
 
         if (msg) msg.textContent = 'Saved';
+        return true;
       }} catch (err) {{
         if (msg) msg.textContent = 'Save failed';
         alert('Could not save review fields. Check network connection and try again.');
+        return false;
+      }}
+    }}
+
+    async function toggleDashboardVisibility(button) {{
+      const row = button.closest('tr');
+      if (!row) return;
+
+      const shouldHide = row.dataset.dashboardHidden !== 'true';
+      if (shouldHide) {{
+        const confirmed = confirm(
+          'Hide this opportunity from the main dashboard?'
+        );
+        if (!confirmed) return;
+      }}
+
+      const priorText = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Saving...';
+
+      const saved = await saveReviewRow(button, {{ dashboardHidden: shouldHide }});
+      if (!saved) {{
+        button.disabled = false;
+        button.textContent = priorText;
       }}
     }}
 

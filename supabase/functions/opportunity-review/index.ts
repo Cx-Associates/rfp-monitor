@@ -264,6 +264,9 @@ serve(async (req) => {
 
       technical_review_notes: cleanString(payload.technical_review_notes),
       admin_review_notes: cleanString(payload.admin_review_notes),
+      // Dashboard visibility is review metadata. It deliberately does not
+      // delete or mutate the opportunity_seen/opportunity_active records.
+      dashboard_hidden: cleanBoolean(payload.dashboard_hidden),
 
       updated_by: cleanString(payload.updated_by),
       updated_at: new Date().toISOString(),

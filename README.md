@@ -114,6 +114,7 @@ The dashboard has:
 - manual-review promotion logic that can move reviewed manual candidates into the main dashboard table;
 - a visible **Promoted from Manual Review** badge for manually promoted rows;
 - preservation of the original automated confidence score when a row is promoted manually;
+- reversible **Hide from dashboard** controls for main-table opportunities, with a collapsed hidden-opportunities section that supports restoration without deleting Supabase records;
 - manual-review X buttons that call the `suppress-manual-review` Supabase Edge Function and write suppression records;
 - client-side filtering/searching;
 - a `NEW` indicator for opportunities newly identified in the current run.
@@ -281,7 +282,8 @@ rfp-monitor/
 |   |       `-- index.ts                         # Manual-review X-button suppression Edge Function
 |   |-- sql/
 |   |   |-- 001_opportunity_review_status.sql    # Review table setup
-|   |   `-- 002_source_health_persistence.sql    # Source-health history tables
+|   |   |-- 002_source_health_persistence.sql    # Source-health history tables
+|   |   `-- 003_opportunity_dashboard_visibility.sql # Reversible dashboard visibility flag
 |   `-- .temp/                                  # Local Supabase CLI temp files; should be ignored by git
 `-- .github/
     `-- workflows/
@@ -965,6 +967,7 @@ create table if not exists public.opportunity_review_status (
 
   technical_review_notes text,
   admin_review_notes text,
+  dashboard_hidden boolean not null default false,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -1008,6 +1011,7 @@ select
   commissioning_technical_reviewed,
   technical_review_notes,
   admin_review_notes,
+  dashboard_hidden,
   updated_at
 from public.opportunity_review_status
 order by updated_at desc
@@ -1030,6 +1034,7 @@ select
   commissioning_technical_reviewed,
   technical_review_notes,
   admin_review_notes,
+  dashboard_hidden,
   updated_at
 from public.opportunity_review_status
 where title ilike '%PASTE PART OF TITLE HERE%'
@@ -1083,7 +1088,7 @@ order by suppressed_at desc, monitor_type, source, title;
 
 ---
 
-## Dashboard Review Fields, Manual Promotion, and Manual-Review Suppression
+## Dashboard Review Fields, Visibility, Manual Promotion, and Manual-Review Suppression
 
 The dashboards are static HTML files, but they have live review-field behavior through Supabase Edge Functions.
 
@@ -1093,6 +1098,7 @@ There are two related dashboard write paths:
 | --- | --- | --- |
 | Load review fields | `opportunity-review` | reads `opportunity_review_status` |
 | Save review fields | `opportunity-review` | upserts `opportunity_review_status` |
+| Hide or restore main-table opportunity | `opportunity-review` | updates `opportunity_review_status.dashboard_hidden`; no opportunity row is deleted |
 | Promote eligible manual row | `opportunity-review` | upserts `opportunity_active` |
 | Remove no-longer-eligible manual promotion | `opportunity-review` | deletes matching row from `opportunity_active` |
 | Hide manual-review row with X button | `suppress-manual-review` | upserts `manual_review_suppressed` |
@@ -1128,6 +1134,21 @@ rfpAdminToken
 ```
 
 The static dashboard does not contain the token or the Supabase service-role key.
+
+### Main-Dashboard Visibility
+
+Each opportunity in the main table has a **Hide from dashboard** control. A
+confirmed hide saves `dashboard_hidden = true` on the shared review record and
+moves the row into the collapsed **Hidden opportunities** section. The action
+does not delete or shorten the retention of records in `opportunity_seen`,
+`opportunity_active`, or `opportunity_review_status`, and it preserves existing
+review notes and ownership fields.
+
+Hidden rows remain available under **Hidden opportunities** with a **Restore to
+dashboard** control. Restoring saves `dashboard_hidden = false` and moves the
+row back into the main table. Because review keys are shared between the EM&V
+and Commissioning dashboards, the visibility decision follows the same RFP
+across both dashboards when it appears in both places.
 
 ### Manual Promotion Rules
 
@@ -1207,7 +1228,7 @@ Supported actions:
 | Action | Requires dashboard token? | Behavior |
 | --- | --- | --- |
 | `list` | No user-entered token | Loads review records by `review_key`. |
-| `save` | Yes | Saves review fields and updates/removes active-cache manual promotion as applicable. |
+| `save` | Yes | Saves review and dashboard-visibility fields and updates/removes active-cache manual promotion as applicable. |
 
 Manual-review suppression function:
 
@@ -1671,13 +1692,16 @@ supabase functions deploy opportunity-review --project-ref udxcbyoohgzdkjxytxzg 
 supabase functions deploy suppress-manual-review --project-ref udxcbyoohgzdkjxytxzg --no-verify-jwt
 ```
 
-11. For review/promotion changes, perform one end-to-end test:
+11. For review/promotion or visibility changes, perform one end-to-end test:
 
    - open the regenerated local dashboard;
    - choose a disposable manual-review row;
    - fill Review Status, Reviewer Fit, one owner, one review checkbox, and notes;
    - save the row;
    - confirm the row appears in `opportunity_active` with `promoted_from_manual_review = true`;
+   - hide a disposable main-table row and confirm it moves to **Hidden opportunities**;
+   - refresh the page and confirm it remains hidden;
+   - restore it and confirm it returns to the main table without deleting its active, seen, or review records;
    - delete the test review row and active-cache row before production rollout.
 
 12. Commit intentional files only. Do not commit local Supabase temp files.

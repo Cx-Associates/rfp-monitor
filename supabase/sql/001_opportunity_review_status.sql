@@ -16,6 +16,7 @@ create table if not exists public.opportunity_review_status (
 
   technical_review_notes text,
   admin_review_notes text,
+  dashboard_hidden boolean not null default false,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
