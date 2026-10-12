@@ -940,6 +940,18 @@ DIRECT_SCRAPE_STATES = [
             "and avoid supporting documents."
         ),
     },
+    {
+        "name": "Wisconsin eSupplier Current Solicitations",
+        "state": "WI",
+        "url": "https://esupplier.wi.gov/psp/esupplier/SUPPLIER/ERP/c/WI_SS_BIDDER_FLU.WI_SS_BDR_BIDS_FLU.GBL?",
+        "type": "wisconsin_esupplier",
+        "active": True,
+        "notes": (
+            "State of Wisconsin PeopleSoft solicitation portal. Dedicated "
+            "session-aware parser keeps only Posted/Awaiting Responses rows "
+            "and retrieves each public detail synopsis for relevance scoring."
+        ),
+    },
 ]
 
 GOOGLE_CSE_QUERIES = [
@@ -1068,6 +1080,18 @@ KEYWORD_TIERS_BY_MONITOR = {
 }
 
 
+# Source-specific exclusions suppress known noisy keyword matches without
+# removing those keywords globally. Source names must exactly match the
+# Opportunity.source value produced by the scraper. Add future exceptions here
+# only after reviewing real false positives from that source.
+SOURCE_KEYWORD_EXCLUSIONS_BY_MONITOR = {
+    "Wisconsin eSupplier Current Solicitations": {
+        "emv": ["quality assurance"],
+        "commissioning": ["quality assurance"],
+    },
+}
+
+
 def normalize_monitor_type(monitor_type: str = None) -> str:
     value = (monitor_type or "emv").strip().lower()
     if value not in VALID_MONITOR_TYPES:
@@ -1106,6 +1130,19 @@ def get_email_recipients(monitor_type: str = None) -> list:
 def get_keyword_tiers(monitor_type: str = None) -> dict:
     monitor_type = normalize_monitor_type(monitor_type)
     return KEYWORD_TIERS_BY_MONITOR[monitor_type]
+
+
+def get_source_keyword_exclusions(
+    source_name: str,
+    monitor_type: str = None,
+) -> list:
+    """Return keywords disabled only for one source and monitor."""
+    monitor_type = normalize_monitor_type(monitor_type)
+    source_rules = SOURCE_KEYWORD_EXCLUSIONS_BY_MONITOR.get(
+        (source_name or "").strip(),
+        {},
+    )
+    return list(source_rules.get(monitor_type, []))
 
 
 def get_min_score_for_mode(mode: str, monitor_type: str = None) -> int:

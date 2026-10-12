@@ -519,12 +519,12 @@ Use the `--sources` CLI argument locally or the `sources` workflow input in GitH
 
 This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES` configuration.
 
-The current production inventory contains **48 configured source concepts**. A normal monitor run creates source-health observations for **44 tracked sources**:
+The current production inventory contains **49 configured source concepts**. A normal monitor run creates source-health observations for **45 tracked sources**:
 
-- 42 active entries from `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES`;
+- 43 active entries from `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES`;
 - SAM.gov and NASEO, which are handled by dedicated scrapers outside those two lists.
 
-The other four configured entries are inactive. Two of the 44 tracked sources--National Grid and Avangrid / United Illuminating--are intentionally recorded as JavaScript-rendered skips rather than actively scraped. With the current inventory, each completed monitor run should therefore persist 44 detail records. A normal scheduled workflow runs both monitor types and should persist 88 detail records across two parent runs. If the source inventory changes, these expected counts must be updated.
+The other four configured entries are inactive. Two of the 45 tracked sources--National Grid and Avangrid / United Illuminating--are intentionally recorded as JavaScript-rendered skips rather than actively scraped. With the current inventory, each completed monitor run should therefore persist 45 detail records. A normal scheduled workflow runs both monitor types and should persist 90 detail records across two parent runs. If the source inventory changes, these expected counts must be updated.
 
 ### Utility / Quasi-Public Sources
 
@@ -581,6 +581,7 @@ The other four configured entries are inactive. Two of the 44 tracked sources--N
 | Maine BGS Business Opportunities | `maine_bgs_business_opportunities` |
 | University of Maine System Upcoming Bids | `umaine_upcoming_bids` |
 | Connecticut Energy Efficiency Board RFPs | `ct_eeb_rfps` |
+| Wisconsin eSupplier Current Solicitations | `wisconsin_esupplier`; anonymous PeopleSoft session; open rows with public synopsis enrichment |
 
 The old direct NYSERDA source is not part of the current direct-source inventory. NYSERDA is covered through the dedicated API-backed utility/quasi-public parser.
 
@@ -706,7 +707,7 @@ group by
 order by r.monitor_type;
 ```
 
-For a normal scheduled workflow using the current 44-source inventory, expect two rows--one `emv` and one `commissioning`--with 44 expected and 44 persisted records in each row.
+For a normal scheduled workflow using the current 45-source inventory, expect two rows--one `emv` and one `commissioning`--with 45 expected and 45 persisted records in each row.
 
 To exercise the production read/aggregation/render path without changing the database, generate a preview for a completed month. The reference time must fall in the month after the reporting month:
 
@@ -1316,6 +1317,28 @@ Scoring weights:
 | Title bonus | +5 |
 
 The title bonus is added when the keyword appears in the opportunity title.
+
+
+### Source-Specific Keyword Exclusions
+
+Known noisy phrases can be disabled for one source without removing them from
+the global EM&V or commissioning keyword lists. These rules are configured in
+`SOURCE_KEYWORD_EXCLUSIONS_BY_MONITOR` in `config.py` and are applied by
+`scorer.py` before points are awarded.
+
+Current rules:
+
+| Source | Monitor | Excluded keyword | Reason |
+| --- | --- | --- | --- |
+| Wisconsin eSupplier Current Solicitations | `emv` | `quality assurance` | The statewide portal uses generic quality-assurance language for unrelated procurements. |
+| Wisconsin eSupplier Current Solicitations | `commissioning` | `quality assurance` | The same generic language is not sufficient evidence of commissioning scope. |
+
+The source name must exactly match the scraper's `Opportunity.source` value.
+The exclusion affects scoring only: the original title and public synopsis
+remain intact in the opportunity record and dashboard. Add a new rule only
+after confirming repeated false positives from that particular source, and
+validate that known relevant opportunities from the source still pass.
+
 
 Confidence labels:
 

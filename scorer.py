@@ -104,6 +104,13 @@ def score_opportunity(
         mode = config.KEYWORD_MODE
     monitor_type = config.normalize_monitor_type(monitor_type)
     keyword_tiers = config.get_keyword_tiers(monitor_type)
+    excluded_keywords = {
+        _normalize_for_matching(keyword)
+        for keyword in config.get_source_keyword_exclusions(
+            opportunity.source,
+            monitor_type,
+        )
+    }
 
     # Pre-normalize title and description once (used repeatedly below)
     title_norm = _normalize_for_matching(opportunity.title or "")
@@ -119,6 +126,15 @@ def score_opportunity(
         """
         nonlocal score
         for kw in keywords:
+            if _normalize_for_matching(kw) in excluded_keywords:
+                logger.debug(
+                    "  SOURCE EXCLUSION: %r for %s (%s)",
+                    kw,
+                    opportunity.source,
+                    monitor_type,
+                )
+                continue
+
             in_title = _keyword_in_text(kw, title_norm)
             in_desc  = _keyword_in_text(kw, desc_norm)
 

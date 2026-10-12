@@ -417,6 +417,8 @@ def _scrape_by_type(
         return _scrape_umaine_upcoming_bids(url, name, state)
     elif ptype == "ct_eeb_rfps":
         return _scrape_ct_eeb_rfps(url, name, state)
+    elif ptype == "wisconsin_esupplier":
+        return _scrape_wisconsin_esupplier(url, name, state)
     elif ptype == "energy_trust_rfps":
         return _scrape_energy_trust_rfps(url, name, state)
     elif ptype == "cape_light_rfps":
@@ -4639,6 +4641,296 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
 
     logger.info(f"Efficiency Maine parser: {len(opportunities)} entries parsed")
     return opportunities
+
+
+# ---------------------------------------------------------------------------
+# Wisconsin eSupplier
+# ---------------------------------------------------------------------------
+
+_WISCONSIN_ESUPPLIER_CONTENT_URL = (
+    "https://esupplier.wi.gov/psc/esupplier/SUPPLIER/ERP/c/"
+    "WI_SS_BIDDER_FLU.WI_SS_BDR_BIDS_FLU.GBL"
+)
+_WISCONSIN_ESUPPLIER_OPEN_STATUS = "posted/awaiting responses"
+
+
+def _parse_wisconsin_esupplier_rows(html: str) -> List[dict]:
+    """Parse the currently displayed Wisconsin eSupplier result rows."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    rows = []
+
+    for row in soup.select("tr[id^='trWI_SS_BIDALL_VW$0_row']"):
+        cells = [
+            clean_text(cell.get_text(" ", strip=True), max_length=1000)
+            for cell in row.find_all("td", recursive=False)
+        ]
+        if len(cells) < 7:
+            continue
+
+        event_number, reference, event_type, title, agency, status, due_text = cells[:7]
+        if not event_number or not title:
+            continue
+
+        row_match = re.search(r"_row(\d+)$", row.get("id", ""))
+        if not row_match:
+            continue
+        detail_action = f"BID_REF${int(row_match.group(1)) - 1}"
+
+        rows.append({
+            "event_number": event_number,
+            "reference": reference,
+            "event_type": event_type,
+            "title": title,
+            "agency": agency,
+            "status": status,
+            "due_text": due_text,
+            "detail_action": detail_action,
+        })
+
+    return rows
+
+
+def _wisconsin_esupplier_form_payload(form) -> dict:
+    """Collect successful PeopleSoft form controls without copying cookies."""
+    payload = {}
+
+    for control in form.select("input[name]"):
+        name = control.get("name")
+        input_type = (control.get("type") or "text").lower()
+        if not name or input_type in {"submit", "button", "image", "file", "reset"}:
+            continue
+        if input_type in {"checkbox", "radio"} and not control.has_attr("checked"):
+            continue
+        payload[name] = control.get("value", "")
+
+    for select in form.select("select[name]"):
+        name = select.get("name")
+        selected = select.select_one("option[selected]") or select.select_one("option")
+        if name and selected:
+            payload[name] = selected.get("value", selected.get_text(strip=True))
+
+    for textarea in form.select("textarea[name]"):
+        name = textarea.get("name")
+        if name:
+            payload[name] = textarea.get_text()
+
+    return payload
+
+
+def _fetch_wisconsin_esupplier_synopsis(
+    session,
+    listing_response,
+    row: dict,
+) -> str:
+    """Open one public detail view and return only its synopsis field."""
+    listing_soup = BeautifulSoup(listing_response.text, "html.parser")
+    form = listing_soup.select_one("form")
+    if not form:
+        raise RuntimeError(
+            "Wisconsin eSupplier detail form was not present for event "
+            f"{row['event_number']}."
+        )
+
+    payload = _wisconsin_esupplier_form_payload(form)
+    if "ICAction" not in payload:
+        raise RuntimeError(
+            "Wisconsin eSupplier ICAction field was not present for event "
+            f"{row['event_number']}."
+        )
+    payload["ICAction"] = row["detail_action"]
+
+    form_action = urllib.parse.urljoin(
+        listing_response.url,
+        form.get("action") or listing_response.url,
+    )
+    detail_response = session.post(
+        form_action,
+        data=payload,
+        headers={"Referer": listing_response.url},
+        timeout=config.REQUEST_TIMEOUT,
+        verify=True,
+        allow_redirects=True,
+    )
+    detail_response.raise_for_status()
+
+    detail_soup = BeautifulSoup(detail_response.text, "html.parser")
+    synopsis = detail_soup.find(id="WI_SS_BID_HDR_WI_SS_EVT_SYNOPSIS$0")
+    synopsis_text = clean_text(
+        synopsis.get_text(" ", strip=True) if synopsis else "",
+        max_length=5000,
+    )
+    if not synopsis_text:
+        raise RuntimeError(
+            "Wisconsin eSupplier detail synopsis was not present for event "
+            f"{row['event_number']}."
+        )
+    return synopsis_text
+
+
+def _scrape_wisconsin_esupplier(url: str, name: str, state: str) -> List[Opportunity]:
+    """Scrape open solicitations from Wisconsin's public eSupplier portal.
+
+    The supplied ``/psp/`` URL is the valid public entry point. PeopleSoft
+    establishes anonymous session cookies there and loads the solicitation
+    table in an iframe from a ``/psc/`` content URL. A requests.Session is
+    therefore required; a standalone requests.get() can be redirected to the
+    portal's cookie-check page.
+
+    Results are sorted by response due date descending. The parser keeps only
+    rows whose status is exactly ``Posted/Awaiting Responses`` and opens each
+    retained row's public detail view to retrieve its synopsis for scoring.
+    Contact information and other detail-page sections are intentionally not
+    copied. If every row on a full 25-row page is open while more result pages
+    exist, it raises an explicit error instead of silently omitting additional
+    open solicitations.
+    """
+    headers = dict(config.REQUEST_HEADERS)
+    headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+
+    session = requests.Session()
+    session.headers.update(headers)
+
+    entry_response = session.get(
+        url,
+        timeout=config.REQUEST_TIMEOUT,
+        verify=True,
+        allow_redirects=True,
+    )
+    entry_response.raise_for_status()
+
+    entry_soup = BeautifulSoup(entry_response.text, "html.parser")
+    iframe = entry_soup.select_one("iframe#ptifrmtgtframe")
+    content_url = (
+        urllib.parse.urljoin(entry_response.url, iframe.get("src"))
+        if iframe and iframe.get("src")
+        else _WISCONSIN_ESUPPLIER_CONTENT_URL
+    )
+
+    content_response = session.get(
+        content_url,
+        timeout=config.REQUEST_TIMEOUT,
+        verify=True,
+        allow_redirects=True,
+    )
+    content_response.raise_for_status()
+    rows = _parse_wisconsin_esupplier_rows(content_response.text)
+
+    # Some PeopleSoft responses omit the iframe query string when copied or
+    # cached. Retrying the stable content component in the same session is safe.
+    if not rows and content_url != _WISCONSIN_ESUPPLIER_CONTENT_URL:
+        content_response = session.get(
+            _WISCONSIN_ESUPPLIER_CONTENT_URL,
+            timeout=config.REQUEST_TIMEOUT,
+            verify=True,
+            allow_redirects=True,
+        )
+        content_response.raise_for_status()
+        rows = _parse_wisconsin_esupplier_rows(content_response.text)
+
+    if not rows:
+        page_text = clean_text(
+            BeautifulSoup(content_response.text, "html.parser").get_text(" ", strip=True),
+            max_length=3000,
+        ).lower()
+        if "cookies enabled" in page_text:
+            raise RuntimeError("Wisconsin eSupplier returned its cookie-check page.")
+        raise RuntimeError("Wisconsin eSupplier solicitation table was not present.")
+
+    page_text = clean_text(
+        BeautifulSoup(content_response.text, "html.parser").get_text(" ", strip=True),
+        max_length=20000,
+    )
+    range_match = re.search(r"1\s*-\s*25\s+of\s+([\d,]+)", page_text, re.IGNORECASE)
+    total_rows = int(range_match.group(1).replace(",", "")) if range_match else len(rows)
+    open_rows = [
+        row for row in rows
+        if row["status"].strip().lower() == _WISCONSIN_ESUPPLIER_OPEN_STATUS
+    ]
+
+    if len(rows) >= 25 and len(open_rows) == len(rows) and total_rows > len(rows):
+        raise RuntimeError(
+            "Wisconsin eSupplier has more than 25 open solicitations; "
+            "pagination must be added before results can be reported completely."
+        )
+
+    opportunities = []
+    detail_listing_response = content_response
+    for row_index, row in enumerate(open_rows):
+        # A detail POST advances PeopleSoft's component state. Reload the list
+        # before each later detail request, then relocate the event so its
+        # zero-based action remains correct if the live ordering has changed.
+        detail_row = row
+        if row_index > 0:
+            detail_listing_response = session.get(
+                content_url,
+                timeout=config.REQUEST_TIMEOUT,
+                verify=True,
+                allow_redirects=True,
+            )
+            detail_listing_response.raise_for_status()
+            refreshed_rows = _parse_wisconsin_esupplier_rows(
+                detail_listing_response.text
+            )
+            detail_row = next(
+                (
+                    candidate
+                    for candidate in refreshed_rows
+                    if candidate["event_number"] == row["event_number"]
+                ),
+                None,
+            )
+            if detail_row is None:
+                raise RuntimeError(
+                    "Wisconsin eSupplier event disappeared while reading details: "
+                    f"{row['event_number']}."
+                )
+
+        synopsis = _fetch_wisconsin_esupplier_synopsis(
+            session,
+            detail_listing_response,
+            detail_row,
+        )
+        date_match = re.search(r"\b\d{1,2}/\d{1,2}/\d{4}\b", row["due_text"])
+        deadline = normalize_date(date_match.group(0)) if date_match else None
+        description = clean_text(
+            " | ".join(filter(None, [
+                synopsis,
+                row["event_type"],
+                f"Agency: {row['agency']}" if row["agency"] else "",
+                f"Solicitation reference: {row['reference']}" if row["reference"] else "",
+                f"Event number: {row['event_number']}",
+                f"Status: {row['status']}",
+                f"Due: {row['due_text']}" if row["due_text"] else "",
+            ])),
+            max_length=5000,
+        )
+
+        opportunities.append(Opportunity(
+            source=name,
+            notice_id=row["event_number"],
+            url=url,
+            title=row["title"],
+            description=description,
+            issuer=row["agency"] or "State of Wisconsin",
+            deadline=deadline,
+            state=state or "WI",
+        ))
+
+    logger.info(
+        "Wisconsin eSupplier parser: %d open entries parsed from %d displayed rows",
+        len(opportunities),
+        len(rows),
+    )
+    return opportunities
+
 
 # ---------------------------------------------------------------------------
 # HTTP utilities
