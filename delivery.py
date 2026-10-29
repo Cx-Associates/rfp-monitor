@@ -304,7 +304,7 @@ def generate_dashboard(
       - Client-side filtering by confidence, source, state, and keyword search
       - "NEW" badge on opportunities from the current run
       - Color-coded confidence labels
-      - Countdown to deadline (red if <= 14 days)
+      - Deadline date with dashboard-retention guidance
       - Mode indicator showing current keyword sensitivity
 
     Args:
@@ -407,12 +407,6 @@ def _render_dashboard_html(
             opp.confidence, "conf-low"
         )
         deadline_str = opp.deadline or "--"
-        days         = opp.days_until_deadline()
-        days_html    = (
-            f'<span class="days-urgent">{days}d</span>' if days is not None and days <= 14
-            else f"{days}d" if days is not None
-            else "--"
-        )
         notice_id = getattr(opp, "notice_id", "") or ""
         review_key = _review_key_for(opp)
         manual_review_attr = "true" if allow_remove else "false"
@@ -516,7 +510,6 @@ def _render_dashboard_html(
             f'<td><span class="{conf_class}">{opp.confidence}</span></td>'
             f"<td>{opp.relevance_score}</td>"
             f"<td>{deadline_str}</td>"
-            f"<td>{days_html}</td>"
             f"{review_cell}"
             f'<td style="font-size:11px;color:#666;">{_esc(kw_str)}</td>'
             f"{remove_cell}"
@@ -532,7 +525,7 @@ def _render_dashboard_html(
 
     if not manual_rows:
         manual_rows = (
-            '<tr class="manual-empty"><td colspan="11" style="color:#777;font-style:italic;">'
+            '<tr class="manual-empty"><td colspan="10" style="color:#777;font-style:italic;">'
             'No below-threshold candidates for manual review.'
             '</td></tr>'
         )
@@ -585,10 +578,9 @@ def _render_dashboard_html(
     th:nth-child(5),td:nth-child(5){{width:70px;min-width:70px;}}
     th:nth-child(6),td:nth-child(6){{width:55px;min-width:55px;}}
     th:nth-child(7),td:nth-child(7){{width:92px;min-width:92px;}}
-    th:nth-child(8),td:nth-child(8){{width:55px;min-width:55px;}}
-    th:nth-child(9),td:nth-child(9){{width:780px;min-width:780px;}}
-    th:nth-child(10),td:nth-child(10){{width:160px;min-width:160px;}}
-    .manual-table th:nth-child(11),.manual-table td:nth-child(11){{width:38px;min-width:38px;}}
+    th:nth-child(8),td:nth-child(8){{width:780px;min-width:780px;}}
+    th:nth-child(9),td:nth-child(9){{width:160px;min-width:160px;}}
+    .manual-table th:nth-child(10),.manual-table td:nth-child(10){{width:38px;min-width:38px;}}
     tr:last-child td{{border-bottom:none;}}
     tr:hover td{{background:#f8f8ff;}}
     .row-new td{{background:#f0fff4;}}
@@ -601,7 +593,6 @@ def _render_dashboard_html(
     .conf-high{{color:#2e7d32;font-weight:700;}}
     .conf-med{{color:#e65100;font-weight:600;}}
     .conf-low{{color:#888;}}
-    .days-urgent{{color:#c62828;font-weight:700;}}
     .review-cell{{width:780px;min-width:780px;vertical-align:top;}}
     .review-controls{{display:grid;grid-template-columns:.95fr .95fr 1.05fr 1.05fr;gap:7px 10px;font-size:11px;align-items:start;}}
     .review-controls label{{display:flex;flex-direction:column;gap:2px;color:#444;font-weight:600;min-width:0;}}
@@ -706,7 +697,7 @@ def _render_dashboard_html(
       <thead>
         <tr>
           <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
-          <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th><th>Days</th>
+          <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th>
           <th>Team Review</th><th>Keywords</th>
         </tr>
       </thead>
@@ -728,12 +719,12 @@ def _render_dashboard_html(
         <thead>
           <tr>
             <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
-            <th>Conf.</th><th>Score</th><th>Deadline</th><th>Days</th>
+            <th>Conf.</th><th>Score</th><th>Deadline</th>
             <th>Team Review</th><th>Keywords</th>
           </tr>
         </thead>
         <tbody id="hidden-opportunities-body">
-          <tr class="hidden-empty"><td colspan="10" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>
+          <tr class="hidden-empty"><td colspan="9" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>
         </tbody>
       </table>
     </div>
@@ -751,7 +742,7 @@ def _render_dashboard_html(
         <thead>
           <tr>
             <th>Title</th><th>Source</th><th>Issuer</th><th>State</th>
-            <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th><th>Days</th>
+            <th>Conf.</th><th>Score</th><th>Deadline <span class="review-help deadline-help" title="Dashboard retention note: RFPs with no listed deadline remain visible for 30 days. RFPs with a listed deadline remain visible until the deadline passes.">i</span></th>
             <th>Team Review</th><th>Keywords</th><th></th>
           </tr>
         </thead>
@@ -937,11 +928,11 @@ def _render_dashboard_html(
 
       if (manualBody && manualRows.length === 0) {{
         manualBody.innerHTML =
-          '<tr class="manual-empty"><td colspan="11" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+          '<tr class="manual-empty"><td colspan="10" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
       }}
       if (hiddenBody && hiddenRows.length === 0) {{
         hiddenBody.innerHTML =
-          '<tr class="hidden-empty"><td colspan="10" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>';
+          '<tr class="hidden-empty"><td colspan="9" style="color:#777;font-style:italic;">No opportunities are currently hidden.</td></tr>';
       }}
     }}
 
@@ -1282,7 +1273,7 @@ def _render_dashboard_html(
 
         if (manualRows.length === 0) {{
           document.getElementById('manual-review-body').innerHTML =
-            '<tr><td colspan="11" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
+            '<tr><td colspan="10" style="color:#777;font-style:italic;">No below-threshold candidates for manual review.</td></tr>';
         }}
       }} catch (err) {{
         alert('Could not hide item. Check network connection and try again.');
