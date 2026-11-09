@@ -178,13 +178,16 @@ def fetch_direct_scrape_states() -> List[Opportunity]:
         state = portal.get("state", "")
         ptype = portal.get("type", "generic_list")
         active = portal.get("active", True)
+        fallback_url = portal.get("fallback_url")
 
         if not active:
             continue
 
         logger.info(f"Direct scraping state portal: {name} ({state})")
         try:
-            opps = _scrape_by_type(url, ptype, name, state)
+            opps = _scrape_by_type(
+                url, ptype, name, state, fallback_url=fallback_url
+            )
             logger.info(f"  {name}: {len(opps)} candidates")
             record_source_health(
                 source_name=name,
@@ -324,7 +327,11 @@ def fetch_naseo() -> List[Opportunity]:
 # ---------------------------------------------------------------------------
 
 def _scrape_by_type(
-    url: str, ptype: str, name: str, state: str
+    url: str,
+    ptype: str,
+    name: str,
+    state: str,
+    fallback_url: Optional[str] = None,
 ) -> List[Opportunity]:
     """
     Dispatch to the appropriate scraper based on portal type.
@@ -378,7 +385,9 @@ def _scrape_by_type(
     elif ptype == "efficiency_maine_rfps":
         return _scrape_efficiency_maine_rfps(url, name, state)
     elif ptype == "nh_energy_rfps":
-        return _scrape_nh_energy_rfps(url, name, state)
+        return _scrape_nh_energy_rfps(
+            url, name, state, fallback_url=fallback_url
+        )
     elif ptype == "maine_municipal_association_rfps":
         return _scrape_maine_municipal_association_rfps(url, name, state)
     elif ptype == "maine_bgs_business_opportunities":
@@ -1281,7 +1290,123 @@ def _fetch_nh_energy_page(url: str) -> Optional[str]:
         return None
 
 
-def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]:
+
+def _scrape_nh_energy_discovery_fallback(
+    fallback_url: str, name: str, state: str
+) -> List[Opportunity]:
+    """Read the public NH DOE agency listing when both official NH pages block automation.
+
+    BiddingSimple is used only to discover active titles and closing dates. Every
+    returned Opportunity links to the corresponding official NH DAS posting.
+    Selector or markup drift raises an error rather than reporting a false zero.
+    """
+    try:
+        response = requests.get(
+            fallback_url,
+            headers=config.REQUEST_HEADERS,
+            timeout=config.REQUEST_TIMEOUT,
+            verify=True,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            "NH DOE public discovery fallback could not be retrieved."
+        ) from exc
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    heading = soup.find("h1")
+    heading_text = clean_text(heading.get_text(" ", strip=True)) if heading else ""
+    if heading_text != "New Hampshire Department of Energy":
+        raise RuntimeError("NH DOE discovery fallback agency marker is missing.")
+
+    cards = soup.select("article.jr")
+    page_text = clean_text(soup.get_text(" ", strip=True), max_length=5000).lower()
+    if not cards:
+        if "0 open bids" in page_text or "no open bids" in page_text:
+            logger.info("NH DOE discovery fallback: no open bids listed")
+            return []
+        raise RuntimeError("NH DOE discovery fallback contained no recognizable bid cards.")
+
+    opportunities: List[Opportunity] = []
+    seen_notice_ids = set()
+    recognized_cards = 0
+
+    for card in cards:
+        agency = card.select_one("a.bl-agency")
+        agency_text = clean_text(agency.get_text(" ", strip=True)) if agency else ""
+        if agency_text != "New Hampshire Department of Energy":
+            continue
+
+        title_link = card.select_one("a.jr-link[href]")
+        if not title_link:
+            raise RuntimeError("NH DOE discovery fallback bid card has no title link.")
+
+        title = clean_text(title_link.get_text(" ", strip=True), max_length=500)
+        notice_match = re.search(
+            r"\bRFP\s+(?:ENGY\s+)?\d{4}-\d{3}\b",
+            title,
+            flags=re.IGNORECASE,
+        )
+        if not notice_match:
+            raise RuntimeError("NH DOE discovery fallback bid ID format changed.")
+
+        notice_id = re.sub(r"\s+", " ", notice_match.group(0)).upper()
+        if notice_id in seen_notice_ids:
+            raise RuntimeError(f"NH DOE discovery fallback duplicated {notice_id}.")
+
+        deadline_node = card.select_one(".dl-date")
+        deadline_text = (
+            clean_text(deadline_node.get_text(" ", strip=True))
+            if deadline_node
+            else ""
+        )
+        try:
+            deadline = datetime.strptime(deadline_text, "%d %b %Y").strftime("%Y-%m-%d")
+        except ValueError as exc:
+            raise RuntimeError(
+                f"NH DOE discovery fallback deadline changed for {notice_id}."
+            ) from exc
+
+        official_slug = notice_id.lower().replace(" ", "-")
+        official_slug = re.sub(r"(?<=\d{4})-(?=\d{3}$)", "", official_slug)
+        official_url = urllib.parse.urljoin(
+            "https://apps.das.nh.gov/NHProcurement/Bid/", official_slug
+        )
+
+        recognized_cards += 1
+        seen_notice_ids.add(notice_id)
+        opportunity = Opportunity(
+            source=name,
+            notice_id=notice_id,
+            url=official_url,
+            title=title,
+            description=title,
+            issuer="New Hampshire Department of Energy",
+            state=state,
+            deadline=deadline,
+            posted_date=None,
+        )
+        if not opportunity.is_expired():
+            opportunities.append(opportunity)
+
+    if recognized_cards == 0:
+        raise RuntimeError("NH DOE discovery fallback contained no DOE bid cards.")
+
+    logger.info(
+        "NH DOE discovery fallback: %s current entries parsed from %s DOE cards",
+        len(opportunities),
+        recognized_cards,
+    )
+    return opportunities
+
+
+def _scrape_nh_energy_rfps(
+    url: str,
+    name: str,
+    state: str,
+    fallback_url: Optional[str] = None,
+) -> List[Opportunity]:
     """
     Scrape the NH Department of Energy / Public Utilities Commission RFP page.
 
@@ -1307,7 +1432,13 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
     """
     html = _fetch_nh_energy_page(url)
     if not html:
-        raise RuntimeError("NH DOE public RFP page could not be retrieved.")
+        if not fallback_url:
+            raise RuntimeError("NH DOE public RFP page could not be retrieved.")
+        logger.warning(
+            "NH DOE official page blocked automated access; "
+            "using the public discovery fallback."
+        )
+        return _scrape_nh_energy_discovery_fallback(fallback_url, name, state)
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -1345,22 +1476,27 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
 
     opportunities = []
     seen_notice_ids = set()
+    recognized_headings = 0
+    open_headings = 0
 
-    for heading in main_content.find_all("h4"):
+    # The current Drupal page uses h3; older snapshots used h4.
+    for heading in main_content.find_all(["h3", "h4"]):
         heading_text = clean_text(heading.get_text(" ", strip=True), max_length=500)
+        heading_text = re.sub(r"\s+", " ", heading_text.replace(chr(0xFFFD), " ")).strip()
         if not heading_text:
             continue
 
         # Keep only RFP headings, e.g. "RFP 2026-002 ..." or "RFP DoIT 2025-042 ..."
         if not heading_text.lower().startswith("rfp"):
             continue
+        recognized_headings += 1
 
         # Pull a stable notice ID from the heading.
         # Examples:
         #   RFP 2026-002 ...
         #   RFP DoIT 2025-042 ...
         notice_match = re.search(
-            r"\bRFP\s+(?:DoIT\s+)?\d{4}-\d{3}\b",
+            r"\bRFP\s+(?:(?:DoIT|Engy)\s+)?\d{4}-\d{3}\b",
             heading_text,
             flags=re.IGNORECASE,
         )
@@ -1396,6 +1532,7 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
             logger.debug(f"NH DOE RFPs: skipping likely closed listing: {heading_text}")
             continue
 
+        open_headings += 1
         chosen_link = None
 
         for link in next_ul.find_all("a", href=True):
@@ -1442,7 +1579,16 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
             posted_date=None,
         ))
 
-    logger.info(f"NH DOE RFP parser: {len(opportunities)} entries parsed")
+    if recognized_headings == 0:
+        raise RuntimeError("NH DOE official page contained no recognizable RFP headings.")
+    if open_headings > 0 and not opportunities:
+        raise RuntimeError("NH DOE official open RFP blocks contained no main documents.")
+
+    logger.info(
+        "NH DOE RFP parser: %s current entries parsed from %s RFP headings",
+        len(opportunities),
+        recognized_headings,
+    )
     return opportunities
 
 def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportunity]:

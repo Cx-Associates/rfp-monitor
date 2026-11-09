@@ -606,12 +606,14 @@ Seven configured entries are inactive. Two of the 42 tracked sources--National G
 | Shelburne VT Bids RFQs and RFPs | `municipal_document_links` |
 | Saranac Lake NY Bids RFPs RFQs | `municipal_document_links` |
 | Vermont Business Registry Bid Search | `vermont_business_registry` |
-| NH Department of Energy RFPs | `nh_energy_rfps` |
+| NH Department of Energy RFPs | `nh_energy_rfps`; official page first, public discovery fallback when Akamai blocks automation; dashboard links remain official NH DAS URLs |
 | Maine Municipal Association RFPs | `maine_municipal_association_rfps` |
 | Maine BGS Business Opportunities | `maine_bgs_business_opportunities` |
 | University of Maine System Upcoming Bids | `umaine_upcoming_bids` |
 | Connecticut Energy Efficiency Board RFPs | `ct_eeb_rfps` |
 | Wisconsin eSupplier Current Solicitations | `wisconsin_esupplier`; anonymous PeopleSoft session; open rows with public synopsis enrichment |
+
+The NH Department of Energy source first requests the official agency page. If Akamai denies the automated request, it reads the public BiddingSimple NH DOE agency listing only for active titles and deadlines, then constructs official NH DAS posting links. A missing agency marker, changed card structure, unknown RFP ID, or unparseable deadline raises a source-health error instead of recording a false zero.
 
 The old direct NYSERDA source is not part of the current direct-source inventory. NYSERDA is covered through the dedicated API-backed utility/quasi-public parser.
 

@@ -903,11 +903,16 @@ DIRECT_SCRAPE_STATES = [
         "name": "NH Department of Energy RFPs",
         "state": "NH",
         "url": "https://www.energy.nh.gov/rules-and-regulatory/requests-proposals",
+        "fallback_url": (
+            "https://biddingsimple.com/bids/agency/"
+            "new-hampshire-department-of-energy-nh"
+        ),
         "type": "nh_energy_rfps",
         "notes": (
-            "NH Department of Energy/Public Utilities Commission RFP page. "
-            "Uses a dedicated parser because each RFP heading includes support "
-            "documents such as Q&A, proposals received, and rankings."
+            "Attempts the official NH Department of Energy RFP page first. "
+            "When Akamai blocks automated access, uses the public BiddingSimple "
+            "agency listing only for discovery and keeps official NH DAS links "
+            "on every opportunity."
         ),
     },
     {
