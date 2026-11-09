@@ -81,6 +81,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Check once per workflow before either monitor sends its digest.
+      # The step always publishes a generic email status, while a later gate
+      # prevents an incomplete five-page dashboard deployment.
+      - name: Check Massachusetts contract schedule
+        id: massachusetts_schedule
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        shell: bash
+        run: |
+          status_file="$RUNNER_TEMP/massachusetts-osd-status.txt"
+          generator_args=(--status-file "$status_file")
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            generator_args+=(--persist)
+          fi
+
+          set +e
+          python generate_massachusetts_contract_schedule.py "${generator_args[@]}"
+          checker_exit=$?
+          set -e
+
+          digest_status="not_checked"
+          if [ -s "$status_file" ]; then
+            read -r digest_status < "$status_file"
+          fi
+          case "$digest_status" in
+            new|none|not_checked) ;;
+            *) digest_status="not_checked" ;;
+          esac
+
+          if [ "$checker_exit" -eq 0 ] && [ -s "docs/massachusetts-contract-schedule.html" ]; then
+            check_succeeded="true"
+          else
+            check_succeeded="false"
+          fi
+          echo "digest_status=$digest_status" >> "$GITHUB_OUTPUT"
+          echo "check_succeeded=$check_succeeded" >> "$GITHUB_OUTPUT"
+          echo "OSD digest status: $digest_status"
+
       - name: Run RFP Monitor
         env:
           SAM_API_KEY: ${{ secrets.SAM_API_KEY }}
@@ -90,6 +130,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           MONITOR_TYPE: ${{ github.event.inputs.monitor_type || 'emv' }}
+          MASSACHUSETTS_OSD_DIGEST_STATUS: ${{ steps.massachusetts_schedule.outputs.digest_status || 'not_checked' }}
         run: |
           mkdir -p scrapers
           touch scrapers/__init__.py
@@ -142,6 +183,16 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python generate_source_health_dashboard.py
 
+      - name: Validate Massachusetts contract schedule output
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          if [ "${{ steps.massachusetts_schedule.outputs.check_succeeded }}" != "true" ]; then
+            echo "Massachusetts schedule check did not complete; retaining the previously deployed Pages site."
+            exit 1
+          fi
+          test -s docs/massachusetts-contract-schedule.html
+
       - name: Upload dashboard preview artifact
         id: dashboard_preview
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true' }}
@@ -153,6 +204,7 @@ jobs:
             docs/emv.html
             docs/commissioning.html
             docs/source-health.html
+            docs/massachusetts-contract-schedule.html
           if-no-files-found: warn
 
       # Put the recovery reference on the run's Summary page so a maintainer

@@ -36,7 +36,7 @@ Scheduled monitor runs expose `SENDGRID_API_KEY` for the two opportunity digests
 
 ## Outputs
 
-The monitor produces three categories of outputs.
+The monitor produces four categories of outputs.
 
 ### 1. Opportunity Email Digest
 
@@ -78,7 +78,7 @@ riazul.hoque@cx-assoc.com
 
 ### 2. GitHub Pages Dashboard
 
-The dashboard is a static GitHub Pages site with a landing page, two opportunity dashboards, and one monthly source-health dashboard.
+The dashboard is a static GitHub Pages site with a landing page, two opportunity dashboards, one monthly source-health dashboard, and a separate Massachusetts contract-planning schedule.
 
 | Page | Purpose |
 | --- | --- |
@@ -86,6 +86,7 @@ The dashboard is a static GitHub Pages site with a landing page, two opportunity
 | `docs/emv.html` | EM&V / Evaluation opportunity dashboard |
 | `docs/commissioning.html` | Commissioning / RCx opportunity dashboard |
 | `docs/source-health.html` | Previous-month source-health dashboard |
+| `docs/massachusetts-contract-schedule.html` | Massachusetts advance-planning contract schedule |
 
 Current live URLs are configured in `config.py`:
 
@@ -93,6 +94,7 @@ Current live URLs are configured in `config.py`:
 https://cx-associates.github.io/rfp-monitor/emv.html
 https://cx-associates.github.io/rfp-monitor/commissioning.html
 https://cx-associates.github.io/rfp-monitor/source-health.html
+https://cx-associates.github.io/rfp-monitor/massachusetts-contract-schedule.html
 ```
 
 The dashboard has:
@@ -152,6 +154,30 @@ The subject format is:
 The email includes a concise metric summary, a sanitized list of sources requiring investigation, and a link to the deployed dashboard. A workflow rerun (`GITHUB_RUN_ATTEMPT` greater than `1`) does not resend the monthly notification. Manual workflow dispatches do not send it. If the previous month has zero completed source-health runs, the workflow records a successful intentional skip and does not call SendGrid.
 
 Each completed non-dry monitor run still attempts to persist its in-memory source-health snapshot to `source_health_runs` and `source_health_records`. Persistence failures are logged but remain isolated from opportunity delivery, opportunity dashboards, and seen-state saves.
+
+### 4. Massachusetts Statewide Contract Schedule
+
+The Massachusetts schedule is an advance-planning page separate from the live opportunity dashboards. It reads the public Operational Services Division PDF, preserves the source table terminology, and orders rows by potential internal relevance. Three visibly separated **Internal Planning Aids** columns show COMMBUYS bid links, a planning-action classification, and the terms that triggered an internal relevance flag.
+
+The page is regenerated once at the start of each eligible non-dry workflow, before either monitor sends its opportunity digest. Scheduled workflows therefore check it every Monday and Thursday at the existing `57 9 * * 1,4` schedule. Manual non-dry workflows also generate the page. Feature-branch workflows generate an artifact preview without writing operational history; runs from `main` request persistence.
+
+The check does **not** create opportunity records, alter the seen-set, send a separate email, or list schedule entries in an email. Each opportunity digest receives only one of these generic status sentences:
+
+```text
+The OSD Procurement Schedule was checked and new opportunities identified.
+The OSD Procurement Schedule was checked and no new opportunities identified.
+The OSD Procurement Schedule was not checked.
+```
+
+"New" means a currently relevant opportunity whose stable identity--Statewide Contract Document Number plus Contract Title--was absent from the most recent successful check. The comparison evaluates only current identities minus previous identities, so an opportunity disappearing from the PDF does not count as new.
+
+The check inserts one sanitized run record into `massachusetts_statewide_contract_schedule_runs`, including status, timestamps, GitHub run identifiers, HTTP/PDF metadata, content hash, schedule period, parsed-row counts, privacy-safe relevant-row fingerprints, the number of newly identified relevant rows, and a privacy-safe generic error summary when a check fails. PDF rows and contact details are not copied into Supabase. The migration is:
+
+```text
+supabase/sql/004_massachusetts_statewide_contract_schedule_runs.sql
+```
+
+Persistence is insert-only and nonfatal. A fetch or parser failure still fails the generator so an incomplete page is not deployed; the previously published Pages site remains available. A Supabase-history write failure is logged but does not invalidate a correctly generated page.
 
 ---
 
@@ -261,6 +287,7 @@ rfp-monitor/
 |-- source_health_report.py                      # Aggregation, streaks, completeness, and Eastern time
 |-- source_health_dashboard.py                   # Sanitized static source-health dashboard renderer
 |-- generate_source_health_dashboard.py          # Paginated read-only Supabase report generator
+|-- generate_massachusetts_contract_schedule.py   # Massachusetts PDF parser, page renderer, and run-history writer
 |-- source_health_email.py                       # Monthly email summary and renderers
 |-- send_monthly_source_health_email.py          # First-Monday guarded SendGrid sender
 |-- requirements.txt                             # Python dependencies
@@ -268,7 +295,8 @@ rfp-monitor/
 |   |-- index.html                               # Landing page output
 |   |-- emv.html                                 # EM&V opportunity dashboard output
 |   |-- commissioning.html                       # Commissioning opportunity dashboard output
-|   `-- source-health.html                       # Monthly source-health dashboard output
+|   |-- source-health.html                       # Monthly source-health dashboard output
+|   `-- massachusetts-contract-schedule.html       # Massachusetts advance-planning schedule output
 |-- scrapers/
 |   |-- __init__.py
 |   |-- sam_gov.py                               # SAM.gov federal API scraper
@@ -283,7 +311,8 @@ rfp-monitor/
 |   |-- sql/
 |   |   |-- 001_opportunity_review_status.sql    # Review table setup
 |   |   |-- 002_source_health_persistence.sql    # Source-health history tables
-|   |   `-- 003_opportunity_dashboard_visibility.sql # Reversible dashboard visibility flag
+|   |   |-- 003_opportunity_dashboard_visibility.sql # Reversible dashboard visibility flag
+|   |   `-- 004_massachusetts_statewide_contract_schedule_runs.sql # Schedule-check history
 |   `-- .temp/                                  # Local Supabase CLI temp files; should be ignored by git
 `-- .github/
     `-- workflows/
@@ -315,7 +344,7 @@ python main.py --mode broad --monitor-type emv --sources all
 python main.py --mode broad --monitor-type commissioning --sources all
 ```
 
-Scheduled runs provide SendGrid credentials for the opportunity digests. After both monitors persist source health, the workflow reads the previous Eastern month, generates `docs/source-health.html`, and deploys all dashboard pages together.
+Scheduled runs provide SendGrid credentials for the opportunity digests. The workflow first checks and renders the Massachusetts contract schedule so one generic status line can appear in both digests. After both monitors persist source health, it reads the previous Eastern month, generates `docs/source-health.html`, validates the five-page artifact, and deploys all dashboard pages together.
 
 Expected output for every completed scheduled run:
 
@@ -366,6 +395,7 @@ docs/index.html
 docs/emv.html
 docs/commissioning.html
 docs/source-health.html
+docs/massachusetts-contract-schedule.html
 ```
 
 ### Supabase Keepalive Workflow
@@ -1800,7 +1830,7 @@ First confirm that the workflow ran from `main` and was not a dry run. Feature b
 Next, inspect the two jobs separately:
 
 - If **RFP Monitor Run** failed, troubleshoot the monitor before attempting a deployment.
-- If **RFP Monitor Run** succeeded and its `rfp-dashboard-preview` artifact contains `index.html`, `emv.html`, `commissioning.html`, and `source-health.html`, the dashboard files are preserved. Do not rerun the monitors merely to publish those same files.
+- If **RFP Monitor Run** succeeded and its `rfp-dashboard-preview` artifact contains `index.html`, `emv.html`, `commissioning.html`, `source-health.html`, and `massachusetts-contract-schedule.html`, the dashboard files are preserved. Do not rerun the monitors merely to publish those same files.
 - If only **Deploy dashboard to GitHub Pages** failed or remained queued, check [GitHub Status](https://www.githubstatus.com/) for an Actions or Pages incident.
 
 While GitHub reports an Actions or Pages incident, wait rather than repeatedly rerunning the workflow. Repeated attempts cannot correct a GitHub service outage and can add confusing failed runs. After both services return to operational, allow approximately ten minutes for GitHub to process its backlog.
@@ -1810,7 +1840,7 @@ To publish the preserved files after service recovery:
 1. Open the failed workflow run's **Summary** page and find **Dashboard recovery information**. Copy the displayed **Source workflow run ID**. For an older run without this summary, copy the number after `/actions/runs/` in the browser URL.
 2. Follow the displayed **Redeploy Existing Dashboard** link and select **Run workflow**.
 3. Select the `main` branch and paste the copied number into `source_run_id`.
-4. Start one new recovery run and verify that all four dashboard files pass validation before deployment.
+4. Start one new recovery run and verify that all five dashboard files pass validation before deployment.
 
 The recovery workflow only downloads, validates, and deploys the existing dashboard files. It does not scrape sources, write Supabase records, send opportunity emails, or send the monthly source-health email. If this failure occurs on the first Monday of a month, record that the monthly email was not sent and decide separately whether a follow-up notification is needed after the dashboard is available.
 

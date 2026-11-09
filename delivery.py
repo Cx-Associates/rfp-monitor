@@ -33,6 +33,26 @@ logger = logging.getLogger(__name__)
 # 1. EMAIL DELIVERY (SendGrid)
 # ===========================================================================
 
+def _render_osd_schedule_status() -> str:
+    """Return one generic OSD schedule status line for opportunity emails."""
+    status = os.environ.get(
+        "MASSACHUSETTS_OSD_DIGEST_STATUS", "not_checked"
+    ).strip().lower()
+    messages = {
+        "new": (
+            "The OSD Procurement Schedule was checked and new "
+            "opportunities identified."
+        ),
+        "none": (
+            "The OSD Procurement Schedule was checked and no new "
+            "opportunities identified."
+        ),
+        "not_checked": "The OSD Procurement Schedule was not checked.",
+    }
+    message = messages.get(status, messages["not_checked"])
+    return f'<p style="color:#444;font-size:13px;margin:12px 0;">{message}</p>'
+
+
 def send_email_digest(
     opportunities: List[Opportunity],
     mode: str = None,
@@ -89,16 +109,21 @@ def send_email_digest(
     run_date = datetime.utcnow().strftime("%B %d, %Y")
     count     = len(opportunities)
     high_cnt  = sum(1 for o in opportunities if o.confidence == "High")
+    osd_status_html = _render_osd_schedule_status()
 
     if count == 0:
         subject  = f"{subject_prefix} No new RFPs in this run ({run_date})"
-        html_body = _render_no_results_email(run_date, monitor_type)
+        html_body = _render_no_results_email(
+            run_date, monitor_type, osd_status_html
+        )
     else:
         subject   = (
             f"{subject_prefix} {count} new RFP{'s' if count > 1 else ''} "
             f"({high_cnt} high confidence) -- {run_date}"
         )
-        html_body = _render_digest_email(opportunities, mode, run_date, monitor_type)
+        html_body = _render_digest_email(
+            opportunities, mode, run_date, monitor_type, osd_status_html
+        )
 
     sg = sendgrid.SendGridAPIClient(api_key=api_key)
     all_ok = True
@@ -135,6 +160,7 @@ def _render_digest_email(
     mode: str,
     run_date: str,
     monitor_type: str,
+    osd_status_html: str,
 ) -> str:
     """
     Build the HTML email body for the opportunity digest.
@@ -249,6 +275,7 @@ def _render_digest_email(
       <a href="{dashboard_url}"
          style="color:#0066cc;">View full dashboard</a>
     </p>
+    {osd_status_html}
     {body_sections}
     <hr style="border:none;border-top:1px solid #eee;margin:24px 0 16px 0;">
     <p style="font-size:11px;color:#aaa;margin:0;">
@@ -263,7 +290,9 @@ def _render_digest_email(
 </html>"""
 
 
-def _render_no_results_email(run_date: str, monitor_type: str) -> str:
+def _render_no_results_email(
+    run_date: str, monitor_type: str, osd_status_html: str
+) -> str:
     """Minimal status-ping email when no new results are found."""
     monitor_type = config.normalize_monitor_type(monitor_type)
     monitor_label = config.get_monitor_label(monitor_type)
@@ -274,6 +303,7 @@ def _render_no_results_email(run_date: str, monitor_type: str) -> str:
   <h2 style="color:#1a1a2e;">CxA RFP Monitor</h2>
   <p>No new {monitor_label} RFP opportunities found in this run ({run_date}).</p>
   <p>All monitored sources were checked. The monitor is running normally.</p>
+  {osd_status_html}
   <p style="font-size:12px;color:#888;">
     <a href="{dashboard_url}">View dashboard</a>
   </p>
@@ -566,11 +596,11 @@ def _render_dashboard_html(
     .filters button{{padding:6px 12px;border:1px solid #ddd;border-radius:5px;
                      background:#fff;cursor:pointer;font-size:13px;}}
     .tbl-wrap{{padding:0 28px 28px;overflow-x:auto;}}
-    table{{width:max-content;min-width:100%;border-collapse:collapse;background:#fff;border-radius:8px;
+    table{{width:max-content;min-width:100%;border-collapse:collapse;background:#fff;border:1px solid #000;border-radius:8px;
            box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:12px;table-layout:fixed;}}
-    th{{background:#1a1a2e;color:#fff;padding:8px 8px;text-align:left;font-size:11px;
+    th{{background:#1a1a2e;color:#fff;border:1px solid #000;padding:8px 8px;text-align:left;font-size:15px;
         font-weight:600;white-space:nowrap;}}
-    td{{padding:8px 8px;border-bottom:1px solid #f0f0f0;vertical-align:top;}}
+    td{{padding:8px 8px;border:1px solid #000;vertical-align:top;}}
     th:nth-child(1),td:nth-child(1){{width:360px;min-width:360px;}}
     th:nth-child(2),td:nth-child(2){{width:105px;min-width:105px;}}
     th:nth-child(3),td:nth-child(3){{width:95px;min-width:95px;}}
@@ -581,7 +611,7 @@ def _render_dashboard_html(
     th:nth-child(8),td:nth-child(8){{width:780px;min-width:780px;}}
     th:nth-child(9),td:nth-child(9){{width:160px;min-width:160px;}}
     .manual-table th:nth-child(10),.manual-table td:nth-child(10){{width:38px;min-width:38px;}}
-    tr:last-child td{{border-bottom:none;}}
+    tr:last-child td{{border-bottom:1px solid #000;}}
     tr:hover td{{background:#f8f8ff;}}
     .row-new td{{background:#f0fff4;}}
     .badge-new{{background:#2e7d32;color:#fff;font-size:10px;font-weight:700;
@@ -626,10 +656,10 @@ def _render_dashboard_html(
     .hidden-opportunities summary{{cursor:pointer;font-weight:700;color:#1a1a2e;}}
     .hidden-opportunities p{{font-size:12px;color:#777;margin:8px 0 10px 0;}}
     .hidden-table{{padding:8px 0 0;}}
-    .hidden-table table{{box-shadow:none;border:1px solid #eee;}}
+    .hidden-table table{{box-shadow:none;border:1px solid #000;}}
     #hidden-opportunities-body tr td{{background:#fafafa;}}
     .manual-table{{padding:8px 0 0;}}
-    .manual-table table{{box-shadow:none;border:1px solid #eee;}}
+    .manual-table table{{box-shadow:none;border:1px solid #000;}}
     .remove-cell{{text-align:center;width:38px;}}
     .remove-btn{{border:0;background:#eee;color:#555;border-radius:50%;
                  width:24px;height:24px;line-height:20px;cursor:pointer;
@@ -656,6 +686,7 @@ def _render_dashboard_html(
     <a class="{emv_nav_class}" href="emv.html">EM&amp;V Dashboard</a>
     <a class="{cx_nav_class}" href="commissioning.html">Commissioning / RCx Dashboard</a>
     <a class="nav-link" href="source-health.html">Source Health Dashboard</a>
+    <a class="nav-link" href="massachusetts-contract-schedule.html">Massachusetts Contract Schedule</a>
   </nav>
 
   <div class="stats">
@@ -1352,6 +1383,11 @@ def _render_landing_html() -> str:
       <h2>Source Health</h2>
       <p>Monthly source-check results, investigation signals, recent run history, and saved-data completeness for the RFP monitors.</p>
       <a href="source-health.html">Open Source Health Dashboard</a>
+    </div>
+    <div class="card">
+      <h2>Massachusetts Contract Schedule</h2>
+      <p>Advance notice of Massachusetts Statewide Contract renewals, replacements, reopenings, expirations, and referenced COMMBUYS bids.</p>
+      <a href="massachusetts-contract-schedule.html">Open Contract Schedule</a>
     </div>
   </div>
 </body>

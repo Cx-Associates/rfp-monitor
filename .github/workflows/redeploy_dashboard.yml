@@ -63,13 +63,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for dashboard_file in index.html emv.html commissioning.html source-health.html; do
+          for dashboard_file in index.html emv.html commissioning.html source-health.html massachusetts-contract-schedule.html; do
             if [[ ! -s "docs/$dashboard_file" ]]; then
               echo "Missing or empty dashboard file: docs/$dashboard_file"
               exit 1
             fi
           done
-          echo "All four dashboard files are present."
+          echo "All five dashboard files are present."
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

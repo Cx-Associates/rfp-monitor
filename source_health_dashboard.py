@@ -497,7 +497,7 @@ def render_source_health_dashboard(
     h2 {{ margin:0 0 6px; font-size:20px; color:var(--navy); }}
     .section-note {{ color:var(--muted); font-size:13px; margin:0 0 16px; }}
     .table-wrap {{ overflow-x:auto; }}
-    table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+    table {{ width:100%; border:1px solid #000; border-collapse:collapse; font-size:13px; }}
     th {{
       background:#eef3f7;
       color:#33475b;
@@ -507,7 +507,7 @@ def render_source_health_dashboard(
       text-transform:none;
     }}
     th, td {{
-      border-bottom:1px solid var(--border);
+      border:1px solid #000;
       padding:10px 9px;
       vertical-align:top;
     }}
@@ -637,6 +637,7 @@ def render_source_health_dashboard(
       <a href="emv.html">EM&amp;V Dashboard</a>
       <a href="commissioning.html">Commissioning / RCx Dashboard</a>
       <a class="active" href="source-health.html">Source Health Dashboard</a>
+      <a href="massachusetts-contract-schedule.html">Massachusetts Contract Schedule</a>
     </div>
   </div>
   <main>

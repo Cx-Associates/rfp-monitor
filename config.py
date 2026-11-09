@@ -1045,6 +1045,16 @@ SOURCE_HEALTH_DASHBOARD_URL = (
     "https://cx-associates.github.io/rfp-monitor/source-health.html"
 )
 
+# Advance-planning schedule published alongside, but kept separate from, the
+# live opportunity dashboards.
+MASSACHUSETTS_CONTRACT_SCHEDULE_OUTPUT_PATH = (
+    "docs/massachusetts-contract-schedule.html"
+)
+MASSACHUSETTS_CONTRACT_SCHEDULE_URL = (
+    "https://cx-associates.github.io/rfp-monitor/"
+    "massachusetts-contract-schedule.html"
+)
+
 DASHBOARD_URLS = {
     "emv": "https://cx-associates.github.io/rfp-monitor/emv.html",
     "commissioning": "https://cx-associates.github.io/rfp-monitor/commissioning.html",
