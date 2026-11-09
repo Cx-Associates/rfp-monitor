@@ -558,10 +558,14 @@ UTILITY_SOURCES = [
     },
     {
         "name": "Eversource (MA/CT/NH)",
-        "url": "https://www.eversource.com/content/ema/about/doing-business-with-us/vendors-suppliers/request-for-proposals",
+        "url": "https://www.eversource.com/residential/about/doing-business-with-us/procurement",
         "js_render": False,
-        "active": True,
-        "notes": "Regularly issues program evaluation and EM&V RFPs.",
+        "active": False,
+        "notes": (
+            "Disabled November 2026. The former public RFP URL now resolves to "
+            "a Page Not Found screen; the official procurement page directs "
+            "suppliers to SAP Ariba and does not expose a public RFP listing."
+        ),
     },
     {
         "name": "Green Mountain Power",
@@ -629,8 +633,12 @@ UTILITY_SOURCES = [
         "name": "NYISO Procurement",
         "url": "https://www.nyiso.com/vendor-registration",
         "js_render": False,
-        "active": True,
-        "notes": "NY ISO. Evaluation and market studies.",
+        "active": False,
+        "notes": (
+            "Disabled November 2026. The configured vendor-registration URL "
+            "returns 404 and no reliable public NYISO solicitation feed has "
+            "been identified."
+        ),
     },
     {
         "name": "AESP Active RFPs",
@@ -741,7 +749,12 @@ DIRECT_SCRAPE_STATES = [
         "state": "VT",
         "url": "https://vsigns.vermont.gov/bso/external/publicBids.sdo?tabcode=PUBLIC_RFPS",
         "type": "vsigns",
-        "notes": "CxA home state. Most important direct scrape.",
+        "active": False,
+        "notes": (
+            "Disabled November 2026. The retired VSIGNS hostname no longer "
+            "resolves and Vermont has moved procurement activity to VTBuys. "
+            "The other configured Vermont public sources remain active."
+        ),
     },
     {
         "name": "Massachusetts COMMBUYS",
@@ -1169,7 +1182,7 @@ REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/141.0.0.0 Safari/537.36"
     ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"

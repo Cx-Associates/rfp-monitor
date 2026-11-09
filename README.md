@@ -549,12 +549,12 @@ Use the `--sources` CLI argument locally or the `sources` workflow input in GitH
 
 This inventory is based on the current `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES` configuration.
 
-The current production inventory contains **49 configured source concepts**. A normal monitor run creates source-health observations for **45 tracked sources**:
+The current production inventory contains **49 configured source concepts**. A normal monitor run creates source-health observations for **42 tracked sources**:
 
-- 43 active entries from `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES`;
+- 40 active entries from `UTILITY_SOURCES` and `DIRECT_SCRAPE_STATES`;
 - SAM.gov and NASEO, which are handled by dedicated scrapers outside those two lists.
 
-The other four configured entries are inactive. Two of the 45 tracked sources--National Grid and Avangrid / United Illuminating--are intentionally recorded as JavaScript-rendered skips rather than actively scraped. With the current inventory, each completed monitor run should therefore persist 45 detail records. A normal scheduled workflow runs both monitor types and should persist 90 detail records across two parent runs. If the source inventory changes, these expected counts must be updated.
+Seven configured entries are inactive. Two of the 42 tracked sources--National Grid and Avangrid / United Illuminating--are intentionally recorded as JavaScript-rendered skips rather than actively scraped. With the current inventory, each completed monitor run should therefore persist 42 detail records. A normal scheduled workflow runs both monitor types and should persist 84 detail records across two parent runs. If the source inventory changes, these expected counts must be updated.
 
 ### Utility / Quasi-Public Sources
 
@@ -565,7 +565,7 @@ The other four configured entries are inactive. Two of the 45 tracked sources--N
 | E4TheFuture | inactive |
 | NYSERDA | `nyserda_current_funding`; API-backed parser for current PON/RFP/RFI/RFQ/RFQL listings |
 | ISO-NE Solicitations | generic list |
-| Eversource (MA/CT/NH) | generic list |
+| Eversource (MA/CT/NH) | inactive; former public RFP URL is obsolete and the official procurement page directs suppliers to SAP Ariba |
 | Green Mountain Power | generic list |
 | National Grid (NY/NE) | skipped: `js_render=True` / Phase 2 |
 | Avangrid / United Illuminating (CT) | skipped: `js_render=True` / Phase 2 |
@@ -573,7 +573,7 @@ The other four configured entries are inactive. Two of the 45 tracked sources--N
 | Energy Trust of Oregon Contracting Opportunities | `energy_trust_rfps` |
 | PG&E Energy Efficiency Solicitations | `pge_ee_solicitations` |
 | PJM Interconnection Solicitations | inactive |
-| NYISO Procurement | generic list; current URL needs follow-up |
+| NYISO Procurement | inactive; configured URL returns 404 and no reliable public solicitation feed has been identified |
 | AESP Active RFPs | `aesp_rfps` |
 | Efficiency Maine | `efficiency_maine_rfps` |
 | Burlington Electric Department RFPs | `burlington_electric_rfps` |
@@ -587,7 +587,7 @@ The other four configured entries are inactive. Two of the 45 tracked sources--N
 
 | Source | Parser Type / Status |
 | --- | --- |
-| Vermont VSIGNS | `vsigns`; known connection/DNS issue in recent local runs |
+| Vermont VSIGNS | inactive; retired hostname no longer resolves and Vermont procurement has moved to VTBuys |
 | Massachusetts COMMBUYS | `commbuys` |
 | California CaleProcure | `ca_eprocure` |
 | SUNY SUCF Construction Bid Calendar | `suny_sucf_bid_calendar_pdf` |
@@ -1455,15 +1455,7 @@ These need a Phase 2 Playwright implementation or an alternate static/feed sourc
 
 ### Vermont VSIGNS
 
-Vermont VSIGNS remains configured as a direct source.
-
-Recent local runs logged a DNS/name-resolution connection warning, but the V1 source-health code recorded the source as:
-
-```text
-HEALTH_WARN_ZERO
-```
-
-This is a known V1 limitation because the lower-level fetch helper returned an empty result rather than raising an exception through the source wrapper.
+Vermont VSIGNS remains in configuration for historical context but is inactive. Its retired hostname no longer resolves, and Vermont has moved procurement activity to VTBuys. Existing Vermont DPS, BGS, municipal, and Business Registry sources remain active; a future VTBuys integration can replace the retired entry when a stable public interface is available.
 
 ### NYSERDA
 
@@ -1479,7 +1471,7 @@ Known limitation: NYSERDA items currently link back to the current funding oppor
 
 ### NYISO Procurement
 
-The configured NYISO procurement URL has returned 404 in recent runs. It remains configured but needs a replacement source URL or should be disabled if no reliable public solicitation page is identified.
+The configured NYISO vendor-registration URL returns 404. The source is inactive as of November 2026 because no reliable public NYISO solicitation feed was identified. Re-enable it only after validating a stable replacement source.
 
 ### NASEO RFP Board
 
@@ -2030,13 +2022,13 @@ Options:
 | --- | --- |
 | Source-health reporting | V1 now persists history, publishes a sanitized monthly dashboard, flags current errors/partial results and 12-run no-result streaks, and sends a first-Monday summary. A private raw-diagnostic drill-down is future work. |
 | Repository and dashboard access | V1 retains the current public GitHub Pages delivery under the organization's free GitHub plan. V2 should move proprietary source code to a private repository and place internal review dashboards behind authenticated hosting. Evaluate private GitHub Pages under a qualifying organization plan or an alternate authenticated host, and audit public forks, workflow artifacts/logs, and exposed review fields before migration. |
-| Vermont VSIGNS health code | Recent local runs show a DNS/name-resolution warning, but V1 records `HEALTH_WARN_ZERO` because the fetch helper returns an empty result. Future health tracking should distinguish fetch failure from true zero candidates. |
-| NYISO Procurement | Current configured URL has returned 404. Need replacement URL or disable source. |
+| Vermont VSIGNS | Retired hostname no longer resolves; source is inactive. Evaluate a stable public VTBuys integration before replacing it. |
+| NYISO Procurement | Source is inactive because the configured URL returns 404. Re-enable only after finding and validating a reliable public feed. |
 | National Grid | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Avangrid / United Illuminating | JavaScript-rendered; requires Playwright or alternate static/feed source. |
 | Google CSE | Disabled in `main.py`; keep disabled unless an eligible working Google CSE project/API key is available. |
 | Generic scrapers | Can collect old PDFs, informational pages, or broad procurement rows. Dedicated parsers and manual-review suppression help manage noise. |
-| Source drift | Website redesigns may cause zero results without raising exceptions. The dashboard flags 12 consecutive no-result runs for investigation, but lower-level fetch helpers still need richer failure classification in V2. |
+| Source drift | Dedicated November 2026 repairs recover NYSERDA, AESP, NASEO, Efficiency Maine, Maine BGS, and SUNY SUCF. Targeted access failures now surface as errors instead of false zeroes; continued zero streaks still require source-by-source review. |
 | BED detail pages | Detail pages may be Cloudflare-blocked. Parser uses listing links and may have limited scope/deadline text. |
 | NYSCR detail links | Detail pages may require login. Parser uses public listing fields and stable CR numbers. |
 | CT DEEP metadata | Search-result metadata may not expose due dates. |

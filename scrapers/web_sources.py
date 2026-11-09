@@ -177,6 +177,10 @@ def fetch_direct_scrape_states() -> List[Opportunity]:
         url   = portal["url"]
         state = portal.get("state", "")
         ptype = portal.get("type", "generic_list")
+        active = portal.get("active", True)
+
+        if not active:
+            continue
 
         logger.info(f"Direct scraping state portal: {name} ({state})")
         try:
@@ -211,34 +215,13 @@ def fetch_direct_scrape_states() -> List[Opportunity]:
 
 
 def fetch_naseo() -> List[Opportunity]:
-    """
-    Scrape the NASEO RFP board at https://www.naseo.org/rfps.
-
-    NASEO posts RFPs/RFIs from state energy offices nationally and is one of
-    the most reliable sources for energy-office procurement opportunities.
-
-    The previous implementation fell back to the generic link scraper when
-    structured selectors failed. That was too broad for this page because it
-    captured:
-      - navigation links,
-      - closed RFPs,
-      - appendix/supporting document links,
-      - "click here" / "here" links,
-      - duplicate links within the same listing.
-
-    This parser instead targets only the "Open RFIs and RFPs" section and
-    creates one Opportunity per top-level list item. It intentionally ignores
-    the "Closed RFPs, RFRs, and RFIs" section.
-    """
+    """Scrape current entries in NASEO's Open RFIs and RFPs section."""
     url = "https://www.naseo.org/rfps"
     html = _fetch_page(url)
     if not html:
-        return []
+        raise RuntimeError("NASEO public RFP page could not be retrieved.")
 
     soup = BeautifulSoup(html, "html.parser")
-
-    # Prefer the main content block if present. This avoids header, menu,
-    # footer, and mega-menu links.
     main_content = (
         soup.select_one("#ctl00_mainContent_ctl00_divContent")
         or soup.select_one("main")
@@ -247,7 +230,6 @@ def fetch_naseo() -> List[Opportunity]:
         or soup
     )
 
-    # Find the "Open RFIs and RFPs" heading.
     open_heading = None
     for heading in main_content.find_all(["h1", "h2", "h3"]):
         heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
@@ -256,98 +238,86 @@ def fetch_naseo() -> List[Opportunity]:
             break
 
     if not open_heading:
-        logger.info("NASEO: no Open RFIs/RFPs heading found")
-        return []
+        raise RuntimeError("NASEO open-opportunity section was not found.")
 
-    # The open opportunities are usually in the first <ul> after the heading.
-    # Stop before the closed section.
-    open_list = None
+    section_nodes = []
     for sibling in open_heading.find_next_siblings():
         if sibling.name in ["h1", "h2", "h3"]:
             sibling_text = clean_text(sibling.get_text(" ", strip=True)).lower()
             if "closed" in sibling_text:
                 break
+        section_nodes.append(sibling)
 
-        if sibling.name == "ul":
-            open_list = sibling
-            break
-
-    if not open_list:
-        logger.info("NASEO: no open RFP/RFI list found")
+    section_text = clean_text(
+        " ".join(node.get_text(" ", strip=True) for node in section_nodes),
+        max_length=4000,
+    ).lower()
+    if any(marker in section_text for marker in [
+        "no open rfps", "no open rfp", "no current rfps", "no current rfp",
+    ]):
         return []
 
-    opportunities = []
-    seen_urls = set()
+    entries = []
+    for node in section_nodes:
+        entries.extend(node.find_all("li", recursive=True))
+        entries.extend(node.find_all("p", recursive=True))
 
     support_link_text = {
-        "here",
-        "click here",
-        "full rfp",
-        "appendix a",
-        "appendix b",
-        "appendix c",
-        "questions and answers",
-        "q&a",
+        "here", "click here", "full rfp", "appendix a", "appendix b",
+        "appendix c", "questions and answers", "q&a",
     }
+    opportunities = []
+    seen = set()
 
-    for item in open_list.find_all("li", recursive=False):
-        item_text = clean_text(item.get_text(" ", strip=True), max_length=1000)
-        if not item_text:
+    for entry in entries:
+        item_text = clean_text(entry.get_text(" ", strip=True), max_length=2000)
+        item_l = item_text.lower()
+        if not item_text or not any(term in item_l for term in [
+            "request for proposal", "request for information", " rfp", " rfi",
+        ]):
             continue
 
-        # Pick the first meaningful link in the listing. NASEO listings often
-        # contain multiple links: the main RFP, an addendum, "here", appendix
-        # files, and email links. We want one opportunity per listing.
         chosen_link = None
-        for link in item.find_all("a", href=True):
+        for link in entry.find_all("a", href=True):
             link_text = clean_text(link.get_text(" ", strip=True))
             href = link.get("href", "")
-
-            if not link_text or len(link_text) < 5:
+            if not link_text or link_text.lower() in support_link_text or href.startswith("mailto:"):
                 continue
-
-            if link_text.lower() in support_link_text:
-                continue
-
-            if href.startswith("mailto:"):
-                continue
-
             absolute_url = urllib.parse.urljoin(url, href)
+            if absolute_url.startswith(("http://", "https://")):
+                chosen_link = (link_text, absolute_url)
+                break
 
-            if not absolute_url.startswith(("http://", "https://")):
-                continue
-
-            chosen_link = (link_text, absolute_url)
-            break
-
-        # If the item has no useful anchor, use the first part of the item text
-        # as the title and the NASEO RFP page as the URL.
         if chosen_link:
             title, href = chosen_link
         else:
-            title = item_text[:200]
+            title = item_text.split(".", 1)[0][:300]
             href = url
 
-        if href in seen_urls:
-            continue
-        seen_urls.add(href)
-
         deadline = _extract_naseo_deadline_from_text(item_text)
+        identity = href if href != url else hashlib.sha256(item_text.encode("utf-8")).hexdigest()
+        if identity in seen:
+            continue
+        seen.add(identity)
 
-        opportunities.append(Opportunity(
+        opp = Opportunity(
             source="NASEO RFP Board",
-            notice_id=href,
+            notice_id=identity,
             url=href,
             title=clean_text(title, max_length=300),
             description=item_text,
             issuer="NASEO / State Energy Office",
             deadline=deadline,
             state="",
-        ))
+        )
+        if not opp.is_expired():
+            opportunities.append(opp)
+
+    if section_text and not opportunities and entries:
+        logger.info("NASEO open section contained no current opportunities")
 
     logger.info(f"NASEO open RFP parser: {len(opportunities)} entries parsed")
     return opportunities
-
 
 # ---------------------------------------------------------------------------
 # Type-dispatched scraper for direct-scrape state portals
@@ -597,23 +567,23 @@ def _scrape_nyserda_current_funding(url: str, name: str, state: str) -> List[Opp
     """
     html = _fetch_page(url)
     if not html:
-        return []
+        raise RuntimeError("NYSERDA funding page could not be retrieved.")
 
     data_source_id = _extract_nyserda_data_source_id(html)
     if not data_source_id:
-        logger.warning("NYSERDA: could not find dataSourceId on current funding page")
-        return []
+        raise RuntimeError("NYSERDA funding API identifier was not found.")
 
     api_url = urllib.parse.urljoin(
         url,
         "/rapi/fundingopportunitiesapi/getfundingopportunities",
     )
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
+    headers = dict(config.REQUEST_HEADERS)
+    headers.update({
         "Accept": "application/json, text/plain, */*",
         "Referer": url,
-    }
+        "X-Requested-With": "XMLHttpRequest",
+    })
 
     try:
         response = requests.get(
@@ -626,7 +596,7 @@ def _scrape_nyserda_current_funding(url: str, name: str, state: str) -> List[Opp
         payload = response.json()
     except Exception as exc:
         logger.warning(f"NYSERDA: API request failed ({type(exc).__name__}: {exc})")
-        return []
+        raise RuntimeError("NYSERDA funding API request failed.") from exc
 
     sections = (
         payload.get("FundingOpportunities")
@@ -1167,25 +1137,12 @@ def _scrape_cec_contracts(url: str, name: str, state: str) -> List[Opportunity]:
     return opportunities
 
 def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
-    """
-    Scrape NEEP's Requests for Proposals page.
-
-    Target page:
-      https://neep.org/about/requests-proposals
-
-    The generic scraper is too broad for NEEP because it captures informational
-    pages such as "EM&V Products" and "Public Policy and Programs", which score
-    highly but are not active procurement opportunities.
-
-    This parser only returns links/listings that look like actual RFP/RFQ/RFI
-    opportunities. If NEEP has no active postings, it returns zero candidates.
-    """
+    """Parse NEEP's structured Open RFPs table and exclude expired rows."""
     html = _fetch_page(url)
     if not html:
-        return []
+        raise RuntimeError("NEEP public RFP page could not be retrieved.")
 
     soup = BeautifulSoup(html, "html.parser")
-
     main_content = (
         soup.select_one("main")
         or soup.select_one("#main")
@@ -1194,9 +1151,7 @@ def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
         or soup.select_one(".region-content")
         or soup
     )
-
     page_text = clean_text(main_content.get_text(" ", strip=True)).lower()
-
     no_active_markers = [
         "there are no current requests for proposals",
         "no current requests for proposals",
@@ -1205,93 +1160,68 @@ def _scrape_neep_rfps(url: str, name: str, state: str) -> List[Opportunity]:
         "no current rfps",
         "currently no rfps",
     ]
-
     if any(marker in page_text for marker in no_active_markers):
-        logger.info("NEEP RFPs: no active RFPs detected on page")
         return []
 
-    include_terms = [
-        "rfp",
-        "rfq",
-        "rfi",
-        "request for proposal",
-        "request for proposals",
-        "request for qualification",
-        "request for qualifications",
-        "request for information",
-    ]
+    target_table = None
+    headers = []
+    for table in main_content.find_all("table"):
+        header_row = table.find("tr")
+        if not header_row:
+            continue
+        candidate_headers = [
+            clean_text(cell.get_text(" ", strip=True)).lower()
+            for cell in header_row.find_all(["th", "td"])
+        ]
+        if any("open rfp" in h for h in candidate_headers) and any(
+            "proposals due" in h for h in candidate_headers
+        ):
+            target_table = table
+            headers = candidate_headers
+            break
 
-    exclude_terms = [
-        "public policy and programs",
-        "em&v products",
-        "emv products",
-        "regional roundup",
-        "legislative and codes tracking",
-        "federal policy resources",
-        "energy efficiency plus beneficial electrification",
-        "home",
-        "about",
-        "contact",
-        "careers",
-        "events",
-        "news",
-        "blog",
-        "resources",
-        "search",
-        "login",
-        "privacy",
-        "terms",
-        "read more",
-        "requests for proposals",  # page title/self-link, not an opportunity
-    ]
+    if target_table is None:
+        raise RuntimeError("NEEP Open RFPs table was not found.")
 
+    title_index = next(i for i, header in enumerate(headers) if "open rfp" in header)
+    due_index = next(i for i, header in enumerate(headers) if "proposals due" in header)
     opportunities = []
-    seen_urls = set()
+    seen = set()
 
-    for link in main_content.find_all("a", href=True):
-        title = clean_text(link.get_text(" ", strip=True))
-        href = link.get("href", "")
-
-        if not title or len(title) < 8:
+    for row in target_table.find_all("tr")[1:]:
+        cells = row.find_all(["th", "td"])
+        if len(cells) <= max(title_index, due_index):
             continue
-
-        title_l = title.lower()
-        absolute_url = urllib.parse.urljoin(url, href)
-
-        if absolute_url.rstrip("/") == url.rstrip("/"):
+        title_cell = cells[title_index]
+        title = clean_text(title_cell.get_text(" ", strip=True), max_length=300)
+        due_text = clean_text(cells[due_index].get_text(" ", strip=True))
+        if not title:
             continue
-
-        if any(term in title_l for term in exclude_terms):
+        link = title_cell.find("a", href=True)
+        detail_url = urllib.parse.urljoin(url, link["href"]) if link else url
+        deadline = _extract_first_date(due_text) or normalize_date(due_text)
+        identity = detail_url if detail_url != url else f"{title}|{deadline or due_text}"
+        if identity in seen:
             continue
-
-        parent_text = clean_text(
-            link.parent.get_text(" ", strip=True),
-            max_length=800,
-        ) if link.parent else title
-
-        combined_l = f"{title} {parent_text}".lower()
-
-        if not any(term in combined_l for term in include_terms):
-            continue
-
-        if absolute_url in seen_urls:
-            continue
-        seen_urls.add(absolute_url)
-
-        deadline = _extract_deadline_from_text(parent_text)
-
-        opportunities.append(Opportunity(
+        seen.add(identity)
+        description = clean_text(
+            " | ".join(cell.get_text(" ", strip=True) for cell in cells),
+            max_length=1500,
+        )
+        opp = Opportunity(
             source=name,
-            notice_id=absolute_url,
-            url=absolute_url,
+            notice_id=identity,
+            url=detail_url,
             title=title,
-            description=parent_text or title,
+            description=description or title,
             issuer="NEEP",
             state=state,
             deadline=deadline,
-        ))
+        )
+        if not opp.is_expired():
+            opportunities.append(opp)
 
-    logger.info(f"NEEP RFP parser: {len(opportunities)} entries parsed")
+    logger.info(f"NEEP RFP parser: {len(opportunities)} current entries parsed")
     return opportunities
 
 def _fetch_nh_energy_page(url: str) -> Optional[str]:
@@ -1377,7 +1307,7 @@ def _scrape_nh_energy_rfps(url: str, name: str, state: str) -> List[Opportunity]
     """
     html = _fetch_nh_energy_page(url)
     if not html:
-        return []
+        raise RuntimeError("NH DOE public RFP page could not be retrieved.")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -2340,25 +2270,42 @@ def _scrape_suny_sucf_bid_calendar_pdf(url: str, name: str, state: str) -> List[
         project_size = None
         consultant = None
 
-        lookahead = lines[idx + 1 : idx + 8]
-        for next_line in lookahead:
-            date_match = date_pattern.search(next_line)
-            if not date_match:
-                continue
+        lookahead = lines[idx + 1 : idx + 14]
+        date_values = []
+        date_positions = []
+        single_date_pattern = re.compile(
+            r"^(?P<date>[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})[*+]?$"
+        )
 
-            advertised_date = normalize_date(date_match.group("adv"))
-            bid_date = normalize_date(date_match.group("bid"))
-
-            after_dates = next_line[date_match.end():].strip()
-            size_match = re.search(r"(\$[\d,]+(?:\s*-\s*\$[\d,]+)?)", after_dates)
-
-            if size_match:
-                project_size = clean_text(size_match.group(1))
-                consultant = clean_text(after_dates[size_match.end():])
+        for position, next_line in enumerate(lookahead):
+            date_match = single_date_pattern.match(next_line)
+            if date_match:
+                normalized = normalize_date(date_match.group("date"))
+                if normalized:
+                    date_values.append(normalized)
+                    date_positions.append(position)
             else:
-                consultant = clean_text(after_dates)
+                combined_match = date_pattern.search(next_line)
+                if combined_match:
+                    date_values.extend([
+                        normalize_date(combined_match.group("adv")),
+                        normalize_date(combined_match.group("bid")),
+                    ])
+                    date_positions.extend([position, position])
+            if len(date_values) >= 2:
+                break
 
-            break
+        if len(date_values) >= 2:
+            advertised_date, bid_date = date_values[:2]
+            after_bid = lookahead[date_positions[1] + 1 :]
+            for position, value in enumerate(after_bid):
+                size_match = re.search(r"(\$[\d,]+(?:\s*-\s*\$[\d,]+)?)", value)
+                if not size_match:
+                    continue
+                project_size = clean_text(size_match.group(1))
+                if position + 1 < len(after_bid):
+                    consultant = clean_text(after_bid[position + 1])
+                break
 
         if not bid_date:
             continue
@@ -2806,7 +2753,7 @@ def _scrape_aesp_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
     html = _fetch_page(url)
     if not html:
-        return []
+        raise RuntimeError("AESP active-RFP page could not be retrieved.")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -3416,7 +3363,7 @@ def _scrape_maine_bgs_business_opportunities(url: str, name: str, state: str) ->
     captures too many support documents as separate opportunities, so this
     parser emits one opportunity per table row.
     """
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+    response = requests.get(url, headers=config.REQUEST_HEADERS, timeout=30)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -4518,7 +4465,7 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
     """
     html = _fetch_page(url)
     if not html:
-        return []
+        raise RuntimeError("Efficiency Maine opportunities page could not be retrieved.")
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -4531,6 +4478,19 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
         or soup
     )
 
+    current_heading = None
+    for heading in main_content.find_all(["h2", "h3", "h4"]):
+        heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
+        if "current and upcoming rfps and rfqs" in heading_text:
+            current_heading = heading
+            break
+    if current_heading is None:
+        raise RuntimeError("Efficiency Maine current-opportunity section was not found.")
+    current_panel = current_heading.find_next_sibling("div")
+    if current_panel is None:
+        raise RuntimeError("Efficiency Maine current-opportunity panel was not found.")
+    main_content = current_panel
+
     opportunities = []
     seen_urls = set()
 
@@ -4538,21 +4498,9 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
         "/opportunities/rfp-",
         "/opportunities/rfq-",
         "/opportunities/rfi-",
-    ]
-
-    include_title_terms = [
-        "request for proposal",
-        "request for proposals",
-        "request for qualifications",
-        "request for quotation",
-        "request for information",
-        "rfp",
-        "rfq",
-        "rfi",
-        "evaluation",
-        "verification",
-        "grid modernization",
-        "support services",
+        "/rfp-",
+        "/rfq-",
+        "/rfi-",
     ]
 
     exclude_title_terms = [
@@ -4584,37 +4532,18 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
         if not any(term in url_l for term in include_url_terms):
             continue
 
-        # Also require the title to look procurement/evaluation related.
-        if not any(term in title_l for term in include_title_terms):
-            continue
-
+        # The enclosing panel is explicitly the current RFP/RFQ section,
+        # so human-readable titles need not repeat an RFP/RFQ keyword.
         seen_urls.add(absolute_url)
 
         detail_html = _fetch_page(absolute_url)
         detail_text = ""
         if detail_html:
             detail_soup = BeautifulSoup(detail_html, "html.parser")
-            detail_links = [
-                (
-                    clean_text(a.get_text(" ", strip=True)),
-                    urllib.parse.urljoin(absolute_url, a.get("href", "")),
-                )
-                for a in detail_soup.find_all("a", href=True)
-            ]
-
-            # If Efficiency Maine has posted a Notice of Award, the RFP/RFQ is
-            # no longer an active opportunity. Exclude it from the dashboard.
-            closed_notice_terms = [
-                "notice of award",
-                "notice of prequalification",
-            ]
-
-            if any(
-                    any(term in link_text.lower() for term in closed_notice_terms)
-                    for link_text, _ in detail_links
-            ):
-                logger.info(f"Efficiency Maine: skipping closed/awarded opportunity: {title}")
-                continue
+            # The index page's explicit Current and Upcoming panel is
+            # authoritative. A detail page can retain an award document from an
+            # earlier phase while accepting responses for a new phase, so an
+            # award-document link alone must not remove a current-panel entry.
             detail_main = (
                 detail_soup.select_one("main")
                 or detail_soup.select_one("#main")
@@ -4628,7 +4557,7 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
         description = detail_text or title
         deadline = _extract_deadline_from_text(description)
 
-        opportunities.append(Opportunity(
+        opp = Opportunity(
             source=name,
             notice_id=absolute_url,
             url=absolute_url,
@@ -4637,7 +4566,9 @@ def _scrape_efficiency_maine_rfps(url: str, name: str, state: str) -> List[Oppor
             issuer="Efficiency Maine",
             state=state,
             deadline=deadline,
-        ))
+        )
+        if not opp.is_expired():
+            opportunities.append(opp)
 
     logger.info(f"Efficiency Maine parser: {len(opportunities)} entries parsed")
     return opportunities
