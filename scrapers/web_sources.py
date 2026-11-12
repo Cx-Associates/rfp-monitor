@@ -1591,6 +1591,65 @@ def _scrape_nh_energy_rfps(
     )
     return opportunities
 
+def _fetch_energy_trust_page(url: str) -> str:
+    """Fetch Energy Trust's canonical page without converting failures to zero."""
+    for attempt in range(1, config.REQUEST_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                url,
+                headers=config.REQUEST_HEADERS,
+                timeout=config.REQUEST_TIMEOUT,
+                verify=True,
+                allow_redirects=True,
+            )
+        except requests.exceptions.Timeout as exc:
+            if attempt < config.REQUEST_MAX_RETRIES:
+                logger.warning(
+                    "Energy Trust request timed out (attempt %s/%s)",
+                    attempt,
+                    config.REQUEST_MAX_RETRIES,
+                )
+                time.sleep(10)
+                continue
+            raise RuntimeError(
+                "Energy Trust contracting page request timed out."
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise RuntimeError(
+                "Energy Trust contracting page connection failed."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(
+                "Energy Trust contracting page request failed."
+            ) from exc
+
+        if response.status_code == 403:
+            raise RuntimeError(
+                "Energy Trust contracting page blocked automated access (HTTP 403)."
+            )
+        if response.status_code == 404:
+            raise RuntimeError(
+                "Energy Trust contracting page was not found (HTTP 404)."
+            )
+        if response.status_code == 429:
+            raise RuntimeError(
+                "Energy Trust contracting page rate-limited the request (HTTP 429)."
+            )
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(
+                f"Energy Trust contracting page returned HTTP {response.status_code}."
+            ) from exc
+
+        if not response.text.strip():
+            raise RuntimeError("Energy Trust contracting page returned an empty response.")
+        return response.text
+
+    raise RuntimeError("Energy Trust contracting page request did not complete.")
+
+
 def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportunity]:
     """
     Scrape Energy Trust of Oregon contracting opportunities.
@@ -1609,16 +1668,15 @@ def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportuni
     This parser avoids global navigation/menu links and creates one opportunity
     per visible RFQ/RFP card.
     """
-    html = _fetch_page(url)
-    if not html:
-        return []
-
+    html = _fetch_energy_trust_page(url)
     soup = BeautifulSoup(html, "html.parser")
 
     cards = soup.select(".module-rfps__rfp")
     if not cards:
-        logger.info("Energy Trust RFPs: no opportunity cards found")
-        return []
+        raise RuntimeError(
+            "Energy Trust opportunity-card structure was not found; "
+            "refusing to record an unverified zero."
+        )
 
     opportunities = []
     seen_urls = set()
@@ -1685,6 +1743,12 @@ def _scrape_energy_trust_rfps(url: str, name: str, state: str) -> List[Opportuni
             posted_date=posted_date,
             deadline=deadline,
         ))
+
+    if not opportunities:
+        raise RuntimeError(
+            "Energy Trust opportunity cards were present but none could be parsed; "
+            "refusing to record an unverified zero."
+        )
 
     logger.info(f"Energy Trust RFP parser: {len(opportunities)} entries parsed")
     return opportunities

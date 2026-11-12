@@ -570,7 +570,7 @@ Seven configured entries are inactive. Two of the 42 tracked sources--National G
 | National Grid (NY/NE) | skipped: `js_render=True` / Phase 2 |
 | Avangrid / United Illuminating (CT) | skipped: `js_render=True` / Phase 2 |
 | VEIC & Efficiency Vermont | `veic_rfps` |
-| Energy Trust of Oregon Contracting Opportunities | `energy_trust_rfps` |
+| Energy Trust of Oregon Contracting Opportunities | `energy_trust_rfps`; keeps the official page as the destination and fails closed when that page blocks automation or its expected opportunity-card structure is unavailable |
 | PG&E Energy Efficiency Solicitations | `pge_ee_solicitations` |
 | PJM Interconnection Solicitations | inactive |
 | NYISO Procurement | inactive; configured URL returns 404 and no reliable public solicitation feed has been identified |
