@@ -8,7 +8,7 @@ on:
         required: true
         type: string
 
-# The recovery job only reads an existing Actions artifact and publishes it.
+# The recovery workflow only reads an existing Actions artifact and publishes it.
 # It does not run the monitors or access application credentials.
 permissions:
   actions: read
@@ -23,14 +23,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  redeploy_pages:
-    name: Redeploy existing dashboard to GitHub Pages
+  # Download, validate, and upload in an upstream job so the Pages deployment
+  # uses a completed artifact-producing job rather than racing a same-job upload.
+  prepare_redeploy:
+    name: Prepare existing dashboard for GitHub Pages
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 20
 
     steps:
       # Validate the operator-provided run ID before using it in an artifact
@@ -71,44 +69,28 @@ jobs:
           done
           echo "All five dashboard files are present."
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
       # A run-and-attempt-specific name prevents immutable artifact collisions
-      # when a maintainer retries this recovery workflow.
+      # when a maintainer starts a new recovery workflow run.
       - name: Upload dashboard artifact
         uses: actions/upload-pages-artifact@v3
         with:
           name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: docs
 
-      # GitHub can finalize an artifact before it appears in the Actions
-      # metadata API used by deploy-pages. Poll for the exact artifact instead
-      # of failing the deployment during that short propagation window.
-      - name: Wait for Pages artifact metadata
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PAGES_ARTIFACT_NAME: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          for attempt in {1..18}; do
-            artifact_count="$(
-              gh api --method GET                 -H "Accept: application/vnd.github+json"                 "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${PAGES_ARTIFACT_NAME}"                 --jq '.total_count'
-            )"
-            if [ "$artifact_count" -ge 1 ]; then
-              echo "Pages artifact metadata is available."
-              exit 0
-            fi
-            echo "Pages artifact metadata is not visible yet (attempt $attempt/18); retrying in 5 seconds."
-            sleep 5
-          done
-          echo "::error::Pages artifact metadata did not become available within 90 seconds."
-          exit 1
+  redeploy_pages:
+    name: Redeploy existing dashboard to GitHub Pages
+    needs: prepare_redeploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-      # deploy-pages v4 waits for at most ten minutes after the artifact
-      # metadata becomes visible. If GitHub reports an Actions or Pages incident,
-      # wait for recovery and start a new manual recovery run.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: Deploy dashboard to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
